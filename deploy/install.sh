@@ -135,18 +135,33 @@ configure_nginx() {
   else
     conf=/etc/nginx/conf.d/$SITE.conf
   fi
-  if [ ! -f "$conf" ] || ! grep -q ssl_certificate "$conf"; then
-    sed -e "s/__DOMAIN__/$DOMAIN/g" -e "s/__PORT__/$PORT/g" "$APP_DIR/deploy/nginx.conf" > "$conf"
-  else
-    # certbot has added TLS to this file: only keep the upstream port in sync.
+  local render=(-e "s/__DOMAIN__/$DOMAIN/g" -e "s/__PORT__/$PORT/g")
+
+  if [ -f "$conf" ] && grep -q ssl_certificate "$conf"; then
+    # HTTPS already set up: only keep the upstream port in sync.
     sed -i "s#proxy_pass http://127.0.0.1:[0-9]*;#proxy_pass http://127.0.0.1:$PORT;#" "$conf"
+    nginx -t
+    systemctl reload nginx
+    return
   fi
+
+  # Plain HTTP first: it proxies the app and serves the ACME challenge directory.
+  install -d -m 755 /var/www/certbot
+  sed "${render[@]}" "$APP_DIR/deploy/nginx.conf" > "$conf"
   nginx -t
   systemctl reload nginx
-  if ! grep -q ssl_certificate "$conf"; then
-    step "Xin chứng chỉ HTTPS (certbot)"
-    certbot --nginx -d "$DOMAIN" --redirect --non-interactive \
-      || fail "certbot chưa cấp được chứng chỉ. Chạy tay: certbot --nginx -d $DOMAIN --redirect, rồi chạy lại $DEPLOY_CMD"
+
+  step "Xin chứng chỉ HTTPS (certbot)"
+  local hint="Nếu certbot báo chưa đăng ký tài khoản, chạy: certbot register --email <email-của-bạn> --agree-tos, rồi chạy lại $DEPLOY_CMD"
+  if certbot plugins 2>/dev/null | grep -q '^\* nginx'; then
+    certbot --nginx -d "$DOMAIN" --redirect --non-interactive || fail "certbot --nginx lỗi. $hint"
+  else
+    echo "certbot không có plugin nginx, dùng chế độ webroot."
+    certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive \
+      --deploy-hook "systemctl reload nginx" || fail "certbot --webroot lỗi. $hint"
+    sed "${render[@]}" "$APP_DIR/deploy/nginx-ssl.conf" > "$conf"
+    nginx -t
+    systemctl reload nginx
   fi
 }
 
