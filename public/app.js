@@ -196,6 +196,10 @@ let videoH = 0;
 let reconnectTimer = null;
 let lastError = null;
 let firstFrameShown = false;
+let lastMessageAt = 0;
+// Video frames (≥ ~10/s even on a static screen) and 1 s pongs both count; this much silence means
+// the connection stalled somewhere on the path, so reconnect instead of freezing until TCP gives up.
+const STALL_TIMEOUT_MS = 4000;
 
 function connect(newDeviceId) {
   deviceId = newDeviceId;
@@ -218,9 +222,11 @@ function connect(newDeviceId) {
   ws = sock;
   sock.onopen = () => {
     lastError = null;
+    lastMessageAt = performance.now();
     ping();
   };
   sock.onmessage = (e) => {
+    lastMessageAt = performance.now();
     if (typeof e.data === 'string') onJson(JSON.parse(e.data));
     else onVideo(e.data);
   };
@@ -234,9 +240,18 @@ function connect(newDeviceId) {
     // Re-check the session too: an expired cookie shows up as a failed WebSocket handshake.
     reconnectTimer = setTimeout(async () => {
       if (await isLoggedIn()) connect(deviceId);
-    }, 2000);
+    }, 1000);
   };
 }
+
+setInterval(() => {
+  if (ws?.readyState !== WebSocket.OPEN || !firstFrameShown || document.visibilityState !== 'visible') return;
+  if (performance.now() - lastMessageAt > STALL_TIMEOUT_MS) {
+    console.warn('stream stalled, reconnecting');
+    lastError = 'mất tín hiệu';
+    ws.close();
+  }
+}, 1000);
 
 function requestKeyframe() {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'keyframe' }));
@@ -426,7 +441,10 @@ function onFrame(frame) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') requestKeyframe();
+  if (document.visibilityState === 'visible') {
+    lastMessageAt = performance.now(); // background tabs are throttled; don't call that a stall
+    requestKeyframe();
+  }
 });
 
 // ---------------------------------------------------------------- pointer input

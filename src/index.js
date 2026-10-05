@@ -34,7 +34,7 @@ const auth = new Auth({
 
 const CHANNEL_TIMEOUT_MS = 10000;
 const AGENT_REQUEST_TIMEOUT_MS = 5000;
-const HEARTBEAT_MS = 15000;
+const HEARTBEAT_MS = 5000;
 const PIPE_HIGH_WATER = 256 * 1024;
 
 // ---------------------------------------------------------------- agents
@@ -171,6 +171,8 @@ function reject(socket, status) {
 
 function accept(req, socket, head, onOpen) {
   wss.handleUpgrade(req, socket, head, (ws) => {
+    socket.setKeepAlive(true, 5000);
+    socket.setNoDelay(true);
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
     ws.on('error', (err) => console.warn('websocket error:', err.message));
@@ -235,7 +237,8 @@ server.on('upgrade', (req, socket, head) => {
   reject(socket, '404 Not Found');
 });
 
-// Drop half-open connections (sleeping phones, dead NAT mappings) and keep proxies from idling out.
+// Drop half-open connections (sleeping phones, dead NAT mappings) within ~10 s, so a stalled
+// viewer or agent reconnects quickly instead of freezing until TCP gives up.
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.isAlive) {
