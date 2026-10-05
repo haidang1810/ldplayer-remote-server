@@ -1,6 +1,6 @@
 // Web client. Video arrives over WebRTC (RTP, played by a <video> element) when it can connect,
 // otherwise over the WebSocket (H.264 decoded with WebCodecs onto a canvas). Pointer/keyboard input
-// becomes scrcpy control messages (big-endian, see server/scrcpy.js for the accepted set).
+// becomes scrcpy control messages (big-endian, see src/scrcpy.js in ldplayer-remote-client).
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
