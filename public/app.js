@@ -54,6 +54,7 @@ function layout() {
   const scale = Math.min(sw / vw, sh / vh);
   canvas.style.width = `${Math.floor(vw * scale)}px`;
   canvas.style.height = `${Math.floor(vh * scale)}px`;
+  canvasRect = null;
 }
 new ResizeObserver(layout).observe(stage);
 
@@ -430,20 +431,34 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------------------------------------------------------------- pointer input
 
-const activePointers = new Map(); // browser pointerId → scrcpy pointer id
+const MSG_TIMED_TOUCH = 0xf0;
+const activePointers = new Map(); // browser pointerId → { id: scrcpy pointer id, x, y }
+let canvasRect = null; // cached: reading layout on every raw pointer event is wasteful
 
 function videoPoint(e) {
-  const r = canvas.getBoundingClientRect();
+  canvasRect ??= canvas.getBoundingClientRect();
+  const r = canvasRect;
   const x = Math.round(((e.clientX - r.left) / r.width) * videoW);
   const y = Math.round(((e.clientY - r.top) / r.height) * videoH);
   return [Math.max(0, Math.min(videoW - 1, x)), Math.max(0, Math.min(videoH - 1, y))];
 }
 
-function sendTouch(action, id, e) {
+/**
+ * Touch events carry the time the point was captured, so the agent can replay them with the
+ * finger's real rhythm (Android derives scroll/fling velocity from event timing).
+ */
+function sendTouch(action, pointer, e) {
   if (!videoW) return;
   const [x, y] = videoPoint(e);
+  if (action === ACTION_MOVE && x === pointer.x && y === pointer.y) return;
+  pointer.x = x;
+  pointer.y = y;
   const pressure = e.pointerType === 'mouse' || !e.pressure ? 1 : e.pressure;
-  send(touchMsg(action, id, x, y, action === ACTION_UP ? 0 : pressure));
+  const buf = new Uint8Array(41);
+  new DataView(buf.buffer).setFloat64(1, e.timeStamp);
+  buf[0] = MSG_TIMED_TOUCH;
+  buf.set(new Uint8Array(touchMsg(action, pointer.id, x, y, action === ACTION_UP ? 0 : pressure)), 9);
+  send(buf.buffer);
 }
 
 canvas.addEventListener('pointerdown', (e) => {
@@ -455,29 +470,32 @@ canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
   }
   canvas.setPointerCapture(e.pointerId);
-  const id = e.pointerType === 'mouse' ? POINTER_ID_GENERIC_FINGER : BigInt(e.pointerId);
-  activePointers.set(e.pointerId, id);
-  sendTouch(ACTION_DOWN, id, e);
+  canvasRect = canvas.getBoundingClientRect();
+  const pointer = { id: e.pointerType === 'mouse' ? POINTER_ID_GENERIC_FINGER : BigInt(e.pointerId), x: -1, y: -1 };
+  activePointers.set(e.pointerId, pointer);
+  sendTouch(ACTION_DOWN, pointer, e);
 });
 
-canvas.addEventListener('pointermove', (e) => {
-  const id = activePointers.get(e.pointerId);
-  if (id === undefined) return;
-  // Browsers merge moves to one per frame; replay the merged points so fast swipes keep their
-  // full path and Android computes fling velocity correctly.
+function onPointerMove(e) {
+  const pointer = activePointers.get(e.pointerId);
+  if (!pointer) return;
+  // Replay points the browser merged, each with its own timestamp, so fast swipes keep their path.
   const points = e.getCoalescedEvents?.() ?? [];
-  for (const p of points.length ? points : [e]) sendTouch(ACTION_MOVE, id, p);
-});
+  for (const p of points.length ? points : [e]) sendTouch(ACTION_MOVE, pointer, p);
+}
+// pointerrawupdate fires as soon as the OS reports movement; pointermove waits for the next frame
+// (up to ~16 ms later). Use the raw stream where the browser supports it.
+canvas.addEventListener('onpointerrawupdate' in window ? 'pointerrawupdate' : 'pointermove', onPointerMove);
 
 function endPointer(e) {
   if (e.pointerType === 'mouse' && e.type === 'pointerup') {
     if (e.button === 2) return send(simpleMsg(MSG.BACK_OR_SCREEN_ON, ACTION_UP));
     if (e.button === 1) return send(keyMsg(ACTION_UP, KEYCODE_HOME));
   }
-  const id = activePointers.get(e.pointerId);
-  if (id === undefined) return;
+  const pointer = activePointers.get(e.pointerId);
+  if (!pointer) return;
   activePointers.delete(e.pointerId);
-  sendTouch(ACTION_UP, id, e);
+  sendTouch(ACTION_UP, pointer, e);
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);

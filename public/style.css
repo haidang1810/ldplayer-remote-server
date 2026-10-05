@@ -26,6 +26,10 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  /* phone browsers: no pull-to-refresh, tap flash or long-press callout while controlling */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 .bar {
