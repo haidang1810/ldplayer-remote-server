@@ -23,7 +23,10 @@
   </header>
 
   <main id="stage">
-    <canvas id="screen"></canvas>
+    <div id="surface">
+      <canvas id="screen"></canvas>
+      <video id="video" muted autoplay playsinline disablepictureinpicture hidden></video>
+    </div>
     <div id="overlay" class="overlay">
       <div id="overlay-text">Đang tải…</div>
       <form id="login-form" class="login-form" hidden>

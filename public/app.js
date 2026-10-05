@@ -1,10 +1,13 @@
-// Web client: decodes the H.264 stream with WebCodecs onto a canvas and turns pointer/keyboard
-// input into scrcpy control messages (big-endian, see server/scrcpy.js for the accepted set).
+// Web client. Video arrives over WebRTC (RTP, played by a <video> element) when it can connect,
+// otherwise over the WebSocket (H.264 decoded with WebCodecs onto a canvas). Pointer/keyboard input
+// becomes scrcpy control messages (big-endian, see server/scrcpy.js for the accepted set).
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
 const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 const stage = $('stage');
+const surface = $('surface');
+const video = $('video');
 const overlay = $('overlay');
 const overlayText = $('overlay-text');
 const loginForm = $('login-form');
@@ -48,13 +51,13 @@ function toast(text, ms = 2500) {
 }
 
 function layout() {
-  const vw = canvas.width || 16;
-  const vh = canvas.height || 9;
+  const vw = videoW || canvas.width || 16;
+  const vh = videoH || canvas.height || 9;
   const { width: sw, height: sh } = stage.getBoundingClientRect();
   const scale = Math.min(sw / vw, sh / vh);
-  canvas.style.width = `${Math.floor(vw * scale)}px`;
-  canvas.style.height = `${Math.floor(vh * scale)}px`;
-  canvasRect = null;
+  surface.style.width = `${Math.floor(vw * scale)}px`;
+  surface.style.height = `${Math.floor(vh * scale)}px`;
+  surfaceRect = null;
 }
 new ResizeObserver(layout).observe(stage);
 
@@ -105,7 +108,8 @@ const INJECT_TEXT_MAX = 300;
 const utf8 = new TextEncoder();
 
 function send(buf) {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(buf);
+  if (rtcActive && dc?.readyState === 'open') dc.send(buf);
+  else if (ws?.readyState === WebSocket.OPEN) ws.send(buf);
 }
 
 function keyMsg(action, keycode, repeat = 0, meta = 0) {
@@ -209,6 +213,7 @@ function connect(newDeviceId) {
     ws.close();
     ws = null;
   }
+  stopRtc();
   resetDecoder();
   firstFrameShown = false;
   videoW = videoH = 0;
@@ -233,6 +238,7 @@ function connect(newDeviceId) {
   sock.onclose = () => {
     if (ws !== sock) return;
     ws = null;
+    stopRtc();
     resetDecoder();
     firstFrameShown = false;
     setStatus('error', 'Mất kết nối');
@@ -266,6 +272,21 @@ function onJson(msg) {
       }
       setStatus('live', msg.deviceName || msg.serial);
       if (!firstFrameShown) showOverlay('Đang chờ khung hình đầu tiên…');
+      layout();
+      if (msg.rtc) {
+        rtcIceServers = msg.rtc.iceServers;
+        startRtc();
+      }
+      break;
+    case 'rtc-offer':
+      onRtcOffer(msg).catch((err) => stopRtc(`WebRTC lỗi: ${err.message}`, true));
+      break;
+    case 'rtc-candidate':
+      pc?.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.mid }).catch(() => {});
+      break;
+    case 'rtc-failed':
+      if (pc) stopRtc(`WebRTC không kết nối được (${msg.message})`);
+      rtcRetryAt = Date.now() + RTC_RETRY_MS;
       break;
     case 'status':
       if (msg.state === 'starting') {
@@ -308,16 +329,20 @@ function onPong(msg) {
 }
 
 const stats = { frames: 0, bytes: 0, latencySum: 0, latencyCount: 0 };
-setInterval(() => {
-  if (ws?.readyState === WebSocket.OPEN && firstFrameShown) {
+setInterval(async () => {
+  if (ws?.readyState === WebSocket.OPEN && rtcActive) {
+    statsEl.textContent = await rtcStatsLine();
+  } else if (ws?.readyState === WebSocket.OPEN && firstFrameShown) {
     const latency = stats.latencyCount ? Math.round(stats.latencySum / stats.latencyCount) : '–';
     const mbps = ((stats.bytes * 8) / 1e6).toFixed(1);
-    statsEl.textContent = `${stats.frames} fps · ${mbps} Mbps · trễ ${latency} ms · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
+    statsEl.textContent = `WS · ${stats.frames} fps · ${mbps} Mbps · trễ ${latency} ms · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
     statsEl.title = 'trễ = từ lúc PC nhận khung hình tới lúc vẽ xong trên trình duyệt (chưa gồm thời gian encode trong máy ảo)';
   } else {
     statsEl.textContent = '';
   }
   stats.frames = stats.bytes = stats.latencySum = stats.latencyCount = 0;
+  // Retry WebRTC periodically after a failure.
+  if (ws?.readyState === WebSocket.OPEN && !pc && rtcIceServers && Date.now() >= rtcRetryAt) startRtc();
 }, 1000);
 
 // ---------------------------------------------------------------- video decoding
@@ -379,6 +404,7 @@ function onDecodeError(err) {
 }
 
 function onVideo(buf) {
+  if (rtcActive) return;
   stats.bytes += buf.byteLength;
   const v = new DataView(buf);
   const key = (v.getUint8(1) & 1) === 1;
@@ -443,19 +469,169 @@ function onFrame(frame) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     lastMessageAt = performance.now(); // background tabs are throttled; don't call that a stall
+    wsJson({ type: rtcActive ? 'keyframe' : 'resume' });
+  } else if (!rtcActive) {
+    wsJson({ type: 'pause' }); // a throttled tab cannot keep up; the agent stops sending
+  }
+});
+
+// ---------------------------------------------------------------- WebRTC
+
+// Video over RTP/UDP (peer-to-peer, or via the relay's TURN server) does not stall on packet loss
+// the way a TCP WebSocket does. Signaling rides on the existing WebSocket; input uses a DataChannel.
+const RTC_ENABLED = params.get('rtc') !== '0' && 'RTCPeerConnection' in window;
+const RTC_FIRST_FRAME_TIMEOUT_MS = 12000;
+const RTC_RETRY_MS = 30000;
+let pc = null;
+let dc = null;
+let rtcActive = false;
+let rtcTimer = null;
+let rtcRetryAt = 0;
+let rtcIceServers = null;
+let rtcLast = null; // previous getStats() sample
+let rtcStalledSeconds = 0;
+
+function wsJson(msg) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function startRtc() {
+  if (!RTC_ENABLED || pc || !rtcIceServers || Date.now() < rtcRetryAt) return;
+  pc = new RTCPeerConnection({ iceServers: rtcIceServers });
+  const peer = pc;
+  peer.onicecandidate = (e) => {
+    if (e.candidate?.candidate) wsJson({ type: 'rtc-candidate', candidate: e.candidate.candidate, mid: e.candidate.sdpMid });
+  };
+  peer.ontrack = (e) => {
+    // Play each frame as soon as it is decodable: no extra jitter buffering.
+    try { e.receiver.jitterBufferTarget = 0; } catch { /* unsupported */ }
+    try { e.receiver.playoutDelayHint = 0; } catch { /* unsupported */ }
+    video.srcObject = e.streams[0] ?? new MediaStream([e.track]);
+    video.play().catch(() => {});
+    waitFirstRtcFrame(peer);
+  };
+  peer.ondatachannel = (e) => {
+    dc = e.channel;
+    dc.binaryType = 'arraybuffer';
+  };
+  peer.onconnectionstatechange = () => {
+    if (peer === pc && peer.connectionState === 'failed') stopRtc('Kết nối WebRTC bị ngắt', true);
+  };
+  rtcTimer = setTimeout(() => {
+    if (peer === pc && !rtcActive) stopRtc('WebRTC không kết nối được', true);
+  }, RTC_FIRST_FRAME_TIMEOUT_MS);
+  wsJson({ type: 'rtc-start' });
+}
+
+async function onRtcOffer(msg) {
+  if (!pc) return;
+  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  wsJson({ type: 'rtc-answer', sdp: pc.localDescription.sdp });
+}
+
+function waitFirstRtcFrame(peer) {
+  const onFirst = () => {
+    if (peer !== pc || rtcActive) return;
+    rtcActive = true;
+    clearTimeout(rtcTimer);
+    wsJson({ type: 'rtc-ready' });
+    resetDecoder();
+    canvas.hidden = true;
+    video.hidden = false;
+    if (!videoW) {
+      videoW = video.videoWidth;
+      videoH = video.videoHeight;
+    }
+    layout();
+    firstFrameShown = true;
+    overlay.hidden = true;
+  };
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFirst);
+  else video.addEventListener('playing', onFirst, { once: true });
+}
+
+/** Tears WebRTC down; with `notify`, tells the agent to resume WebSocket video and backs off. */
+function stopRtc(reason = null, notify = false) {
+  clearTimeout(rtcTimer);
+  const wasActive = rtcActive;
+  rtcActive = false;
+  rtcLast = null;
+  rtcStalledSeconds = 0;
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  dc = null;
+  video.srcObject = null;
+  video.hidden = true;
+  canvas.hidden = false;
+  if (notify) {
+    wsJson({ type: 'rtc-stop' });
+    rtcRetryAt = Date.now() + RTC_RETRY_MS;
+  }
+  if (reason) toast(`${reason}, chuyển sang WebSocket`);
+  if (wasActive && ws) {
+    firstFrameShown = false;
     requestKeyframe();
   }
+}
+
+async function rtcStatsLine() {
+  const report = await pc.getStats();
+  let inbound = null;
+  let pairId = null;
+  report.forEach((s) => {
+    if (s.type === 'inbound-rtp' && s.kind === 'video') inbound = s;
+    if (s.type === 'transport' && s.selectedCandidatePairId) pairId = s.selectedCandidatePairId;
+  });
+  if (!pairId) {
+    report.forEach((s) => {
+      if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pairId = s.id;
+    });
+  }
+  const pair = pairId ? report.get(pairId) : null;
+  const local = pair ? report.get(pair.localCandidateId) : null;
+  const path = local?.candidateType === 'relay' ? 'TURN' : 'P2P';
+  if (pair?.currentRoundTripTime !== undefined) rtt = pair.currentRoundTripTime * 1000;
+  if (!inbound) return `WebRTC ${path} · đang chờ video`;
+
+  const prev = rtcLast;
+  rtcLast = inbound;
+  if (!prev) return `WebRTC ${path}`;
+  const bytes = inbound.bytesReceived - prev.bytesReceived;
+  const decoded = (inbound.framesDecoded ?? 0) - (prev.framesDecoded ?? 0);
+  const emitted = (inbound.jitterBufferEmittedCount ?? 0) - (prev.jitterBufferEmittedCount ?? 0);
+  const buffer = emitted > 0 ? Math.round((((inbound.jitterBufferDelay ?? 0) - (prev.jitterBufferDelay ?? 0)) / emitted) * 1000) : '–';
+  const lost = (inbound.packetsLost ?? 0) - (prev.packetsLost ?? 0);
+
+  // Data arriving but nothing decoding: the decoder lost its reference, ask for a key frame.
+  // Nothing arriving at all for a while: the path is dead, fall back to the WebSocket.
+  rtcStalledSeconds = decoded === 0 ? rtcStalledSeconds + 1 : 0;
+  if (decoded === 0 && bytes > 0 && rtcStalledSeconds >= 2) requestKeyframe();
+  if (bytes === 0 && rtcStalledSeconds >= 5) stopRtc('Mất tín hiệu WebRTC', true);
+
+  return `WebRTC ${path} · ${decoded} fps · ${((bytes * 8) / 1e6).toFixed(1)} Mbps · đệm ${buffer} ms · mất ${lost} gói · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
+}
+
+video.addEventListener('resize', () => {
+  if (rtcActive && video.videoWidth && !videoW) {
+    videoW = video.videoWidth;
+    videoH = video.videoHeight;
+  }
+  layout();
 });
 
 // ---------------------------------------------------------------- pointer input
 
 const MSG_TIMED_TOUCH = 0xf0;
 const activePointers = new Map(); // browser pointerId → { id: scrcpy pointer id, x, y }
-let canvasRect = null; // cached: reading layout on every raw pointer event is wasteful
+let surfaceRect = null; // cached: reading layout on every raw pointer event is wasteful
 
 function videoPoint(e) {
-  canvasRect ??= canvas.getBoundingClientRect();
-  const r = canvasRect;
+  surfaceRect ??= surface.getBoundingClientRect();
+  const r = surfaceRect;
   const x = Math.round(((e.clientX - r.left) / r.width) * videoW);
   const y = Math.round(((e.clientY - r.top) / r.height) * videoH);
   return [Math.max(0, Math.min(videoW - 1, x)), Math.max(0, Math.min(videoH - 1, y))];
@@ -479,7 +655,7 @@ function sendTouch(action, pointer, e) {
   send(buf.buffer);
 }
 
-canvas.addEventListener('pointerdown', (e) => {
+surface.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (e.pointerType === 'mouse') {
     ime.focus({ preventScroll: true }); // route the physical keyboard to the device
@@ -487,8 +663,8 @@ canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 1) return send(keyMsg(ACTION_DOWN, KEYCODE_HOME));
     if (e.button !== 0) return;
   }
-  canvas.setPointerCapture(e.pointerId);
-  canvasRect = canvas.getBoundingClientRect();
+  surface.setPointerCapture(e.pointerId);
+  surfaceRect = surface.getBoundingClientRect();
   const pointer = { id: e.pointerType === 'mouse' ? POINTER_ID_GENERIC_FINGER : BigInt(e.pointerId), x: -1, y: -1 };
   activePointers.set(e.pointerId, pointer);
   sendTouch(ACTION_DOWN, pointer, e);
@@ -503,7 +679,7 @@ function onPointerMove(e) {
 }
 // pointerrawupdate fires as soon as the OS reports movement; pointermove waits for the next frame
 // (up to ~16 ms later). Use the raw stream where the browser supports it.
-canvas.addEventListener('onpointerrawupdate' in window ? 'pointerrawupdate' : 'pointermove', onPointerMove);
+surface.addEventListener('onpointerrawupdate' in window ? 'pointerrawupdate' : 'pointermove', onPointerMove);
 
 function endPointer(e) {
   if (e.pointerType === 'mouse' && e.type === 'pointerup') {
@@ -515,11 +691,11 @@ function endPointer(e) {
   activePointers.delete(e.pointerId);
   sendTouch(ACTION_UP, pointer, e);
 }
-canvas.addEventListener('pointerup', endPointer);
-canvas.addEventListener('pointercancel', endPointer);
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+surface.addEventListener('pointerup', endPointer);
+surface.addEventListener('pointercancel', endPointer);
+surface.addEventListener('contextmenu', (e) => e.preventDefault());
 
-canvas.addEventListener(
+surface.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();

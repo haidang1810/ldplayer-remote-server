@@ -9,7 +9,8 @@
 #     ldplayer-relay-deploy                     # add --force to reinstall even if nothing changed
 #
 # The relay listens only on 127.0.0.1:<port>; nginx terminates HTTPS and proxies to it.
-# Firewall rules are left untouched. relay.env (password, agent key) is never regenerated.
+# Also installs coturn (TURN relay for WebRTC). Firewall rules are left untouched: open 80/443 for
+# nginx and 3478 tcp/udp + 49160-49300/udp for TURN yourself. relay.env is never regenerated.
 set -euo pipefail
 
 APP_DIR=/opt/ldplayer-remote-server
@@ -21,6 +22,9 @@ SITE=ldplayer-remote
 ENV_FILE=$APP_DIR/relay.env
 BACKUP_DIR=/var/backups/ldplayer-relay
 DEPLOY_CMD=/usr/local/sbin/ldplayer-relay-deploy
+TURN_PORT=3478
+TURN_MIN_PORT=49160
+TURN_MAX_PORT=49300
 
 fail() { echo "LỖI: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
@@ -87,6 +91,12 @@ ensure_env() {
   env_set HOST 127.0.0.1
   env_set TRUST_PROXY 1
   env_set DOMAIN "$DOMAIN"
+  if [ -z "$(env_get TURN_SECRET)" ]; then
+    env_set TURN_SECRET "$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+    ENV_CHANGED=1
+  fi
+  env_set TURN_HOST "$DOMAIN"
+  env_set TURN_PORT "$TURN_PORT"
   chmod 600 "$ENV_FILE"
   chown "$APP_USER:$APP_USER" "$ENV_FILE"
 }
@@ -104,6 +114,33 @@ install_service() {
   systemctl daemon-reload
   systemctl enable "$SERVICE" >/dev/null
   systemctl restart "$SERVICE"
+}
+
+configure_turn() {
+  if ! command -v turnserver >/dev/null; then
+    step "Cài coturn (TURN server cho WebRTC)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y coturn >/dev/null
+  fi
+  local secret public_ip local_ips external=""
+  secret="$(env_get TURN_SECRET)"
+  public_ip="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}')"
+  local_ips=" $(hostname -I) "
+  # Behind 1:1 NAT (public IP not on an interface) coturn must advertise the public address.
+  if [ -n "$public_ip" ] && [[ "$local_ips" != *" $public_ip "* ]]; then
+    external="external-ip=$public_ip/$(hostname -I | awk '{print $1}')"
+  fi
+  if [ -f /etc/turnserver.conf ] && ! grep -q 'LDPlayer Remote' /etc/turnserver.conf; then
+    cp -p /etc/turnserver.conf "/etc/turnserver.conf.bak.$(date +%Y%m%d-%H%M%S)"
+  fi
+  sed -e "s#__TURN_PORT__#$TURN_PORT#" -e "s#__EXTERNAL_IP__#$external#" -e "s#__DOMAIN__#$DOMAIN#g" \
+      -e "s#__TURN_SECRET__#$secret#" -e "s#__MIN_PORT__#$TURN_MIN_PORT#" -e "s#__MAX_PORT__#$TURN_MAX_PORT#" \
+      "$APP_DIR/deploy/turnserver.conf" > /etc/turnserver.conf
+  chmod 640 /etc/turnserver.conf
+  chown root:turnserver /etc/turnserver.conf 2>/dev/null || true
+  [ -f /etc/default/coturn ] && sed -i 's/^#\?TURNSERVER_ENABLED=.*/TURNSERVER_ENABLED=1/' /etc/default/coturn
+  systemctl enable coturn >/dev/null
+  systemctl restart coturn
+  systemctl is-active --quiet coturn || { journalctl -u coturn -n 20 --no-pager; fail "coturn không chạy được."; }
 }
 
 healthy() {
@@ -181,6 +218,7 @@ main() {
   [ -n "$DOMAIN" ] || fail "lần cài đầu cần tên miền: bash install.sh <domain> [port]"
   check_port
   FIRST_INSTALL=0
+  ENV_CHANGED=0
 
   step "Cập nhật mã nguồn ($APP_DIR)"
   backup_env
@@ -196,8 +234,11 @@ main() {
 
   ensure_env
 
+  step "TURN server (coturn, cổng $TURN_PORT)"
+  configure_turn
+
   step "Dịch vụ $SERVICE (127.0.0.1:$PORT)"
-  if [ "$changed" = 1 ] || [ "$force" = 1 ] || ! systemctl is-active --quiet "$SERVICE"; then
+  if [ "$changed" = 1 ] || [ "$force" = 1 ] || [ "$ENV_CHANGED" = 1 ] || ! systemctl is-active --quiet "$SERVICE"; then
     install_service
   fi
   healthy || rollback
@@ -219,6 +260,7 @@ main() {
   fi
   echo "https://$DOMAIN -> HTTP $(curl -s -o /dev/null -w '%{http_code}' "https://$DOMAIN/" || true)"
   echo "Lần sau cập nhật code: $DEPLOY_CMD"
+  echo "Firewall (tự mở nếu chưa): $TURN_PORT/tcp, $TURN_PORT/udp và $TURN_MIN_PORT-$TURN_MAX_PORT/udp cho TURN."
   if [ "$FIRST_INSTALL" = 1 ]; then
     echo
     echo "AGENT_KEY cho file agent.env trên PC:"

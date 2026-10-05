@@ -121,15 +121,29 @@ svg {
   background: #000;
 }
 
-#screen {
-  display: block;
+/* Sized by layout() to the video's aspect ratio; receives all pointer input. The canvas (WebSocket
+   path, WebCodecs) and the video element (WebRTC path) fill it, one at a time. */
+#surface {
+  position: relative;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  outline: none;
   cursor: default;
   background: #000;
 }
+
+#surface > canvas, #surface > video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  object-fit: fill;
+  background: #000;
+}
+
+#surface > [hidden] { display: none; }
 
 .overlay {
   position: absolute;

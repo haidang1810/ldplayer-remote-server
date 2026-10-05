@@ -2,7 +2,7 @@
 // outbound control connection to it; for each viewer the agent dials back a dedicated channel
 // socket, and the relay pipes viewer ⇄ channel byte-for-byte.
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -18,6 +18,10 @@ const config = {
   agentKey: process.env.AGENT_KEY,
   sessionSecret: process.env.SESSION_SECRET,
   trustProxy: (process.env.TRUST_PROXY ?? '1') === '1',
+  // coturn with use-auth-secret: we mint short-lived TURN credentials for each viewer.
+  turnSecret: process.env.TURN_SECRET,
+  turnHost: process.env.TURN_HOST ?? process.env.DOMAIN,
+  turnPort: Number(process.env.TURN_PORT ?? 3478),
 };
 for (const [key, name] of [['passwordHash', 'PASSWORD_HASH'], ['agentKey', 'AGENT_KEY'], ['sessionSecret', 'SESSION_SECRET']]) {
   if (!config[key]) {
@@ -33,6 +37,31 @@ const auth = new Auth({
 });
 
 const CHANNEL_TIMEOUT_MS = 10000;
+const TURN_CREDENTIAL_TTL_S = 12 * 3600;
+
+/**
+ * ICE servers for one viewer's WebRTC session, in both formats (browser RTCPeerConnection and the
+ * agent's node-datachannel). TURN uses coturn's REST-style credentials: username = expiry:label,
+ * password = base64(HMAC-SHA1(secret, username)).
+ */
+function iceServers() {
+  if (!config.turnSecret || !config.turnHost) {
+    return {
+      agent: ['stun:stun.l.google.com:19302'],
+      browser: [{ urls: 'stun:stun.l.google.com:19302' }],
+    };
+  }
+  const { turnHost: host, turnPort: port } = config;
+  const username = `${Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL_S}:ldplayer`;
+  const password = createHmac('sha1', config.turnSecret).update(username).digest('base64');
+  return {
+    agent: [`stun:${host}:${port}`, { hostname: host, port, username, password, relayType: 'TurnUdp' }],
+    browser: [
+      { urls: `stun:${host}:${port}` },
+      { urls: [`turn:${host}:${port}?transport=udp`, `turn:${host}:${port}?transport=tcp`], username, credential: password },
+    ],
+  };
+}
 const AGENT_REQUEST_TIMEOUT_MS = 5000;
 const HEARTBEAT_MS = 5000;
 const PIPE_HIGH_WATER = 256 * 1024;
@@ -230,7 +259,7 @@ server.on('upgrade', (req, socket, head) => {
       viewer.on('close', () => {
         if (channels.delete(id)) clearTimeout(timer);
       });
-      agent.send({ type: 'open', channel: id, serial });
+      agent.send({ type: 'open', channel: id, serial, ice: iceServers() });
     });
   }
 
@@ -252,4 +281,5 @@ setInterval(() => {
 
 server.listen(config.port, config.host, () => {
   console.log(`relay listening on http://${config.host}:${config.port} (trust proxy: ${config.trustProxy})`);
+  console.log(config.turnSecret ? `TURN: ${config.turnHost}:${config.turnPort}` : 'TURN: not configured (WebRTC may fail on mobile networks)');
 });

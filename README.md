@@ -27,7 +27,13 @@ Script sẽ:
 - tạo dịch vụ systemd `ldplayer-relay` (chỉ nghe ở `127.0.0.1`);
 - tạo site nginx (`deploy/nginx.conf`, có hỗ trợ WebSocket) và xin chứng chỉ HTTPS bằng `certbot --nginx`.
 
-Script **không** đụng tới firewall: cổng 80/443 phải mở sẵn cho nginx, còn port của relay không cần mở.
+Script cũng cài **coturn** (TURN server) để WebRTC vẫn chạy khi điện thoại và PC không nối thẳng được (thường gặp với 4G).
+
+Script **không** đụng tới firewall. Bạn tự mở:
+- `80/tcp`, `443/tcp` cho nginx;
+- `3478/tcp`, `3478/udp` và `49160-49300/udp` cho TURN.
+
+Port của relay (8090) không cần mở.
 
 Cập nhật code: chạy `ldplayer-relay-deploy`. Lệnh này giữ nguyên mật khẩu, domain và port; sao lưu `relay.env` vào `/var/backups/ldplayer-relay/`; tự quay về bản cũ nếu bản mới không khởi động được. Thêm `--force` để cài lại kể cả khi code không đổi.
 Xem log: `journalctl -u ldplayer-relay -f`
