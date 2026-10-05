@@ -29,7 +29,7 @@ Script sẽ:
 
 Script **không** đụng tới firewall: cổng 80/443 phải mở sẵn cho nginx, còn port của relay không cần mở.
 
-Cập nhật code: chạy lại `bash install.sh <domain>` (mật khẩu cũ được giữ nguyên).
+Cập nhật code: chạy `ldplayer-relay-deploy`. Lệnh này giữ nguyên mật khẩu, domain và port; sao lưu `relay.env` vào `/var/backups/ldplayer-relay/`; tự quay về bản cũ nếu bản mới không khởi động được. Thêm `--force` để cài lại kể cả khi code không đổi.
 Xem log: `journalctl -u ldplayer-relay -f`
 
 ## Cấu hình (`relay.env`, do `npm run setup` tạo)
