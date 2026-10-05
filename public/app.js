@@ -53,7 +53,9 @@ function toast(text, ms = 2500) {
 function layout() {
   const vw = videoW || canvas.width || 16;
   const vh = videoH || canvas.height || 9;
-  const { width: sw, height: sh } = stage.getBoundingClientRect();
+  const cs = getComputedStyle(stage); // padding keeps clear of the notch in full-screen mode
+  const sw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const sh = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
   const scale = Math.min(sw / vw, sh / vh);
   surface.style.width = `${Math.floor(vw * scale)}px`;
   surface.style.height = `${Math.floor(vh * scale)}px`;
@@ -948,10 +950,44 @@ for (const btn of nav.querySelectorAll('button[data-key]')) {
 
 $('btn-keyboard').addEventListener('click', () => ime.focus());
 $('btn-notify').addEventListener('click', () => send(simpleMsg(MSG.EXPAND_NOTIFICATION_PANEL)));
-$('btn-fullscreen').addEventListener('click', () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen?.().catch(() => {});
+// Real fullscreen where the browser allows it (desktop, Android, iPad). iPhone Safari has no
+// Fullscreen API for pages, so there (and if the request fails) hide the bars instead; opened
+// from the home screen the page already runs without Safari's UI.
+const fullscreenApi = {
+  element: () => document.fullscreenElement ?? document.webkitFullscreenElement,
+  request: (el) => (el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el),
+  exit: () => (document.exitFullscreen ?? document.webkitExitFullscreen)?.call(document),
+};
+
+function setImmersive(on) {
+  document.body.classList.toggle('immersive', on);
+  storageSet('ldr-immersive', on ? '1' : '0');
+}
+
+async function toggleFullscreen() {
+  if (fullscreenApi.element()) return fullscreenApi.exit();
+  if (document.body.classList.contains('immersive')) return setImmersive(false);
+  try {
+    const pending = fullscreenApi.request(document.documentElement);
+    if (!pending && !fullscreenApi.element()) throw new Error('unsupported');
+    await pending;
+  } catch {
+    setImmersive(true);
+  }
+}
+
+$('btn-fullscreen').addEventListener('click', toggleFullscreen);
+$('float-exit').addEventListener('click', toggleFullscreen);
+$('float-back').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  send(keyMsg(ACTION_DOWN, 4));
 });
+$('float-back').addEventListener('pointerup', () => send(keyMsg(ACTION_UP, 4)));
+$('float-bar').addEventListener('mousedown', (e) => e.preventDefault()); // keep keyboard focus
+
+// A home-screen app remembers the full-screen choice between launches.
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if (standalone && storageGet('ldr-immersive') === '1') setImmersive(true);
 
 // ---------------------------------------------------------------- devices
 

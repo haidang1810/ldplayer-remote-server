@@ -6,6 +6,13 @@
   <meta name="theme-color" content="#0f1115">
   <title>LDPlayer Remote</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6' y='2' width='12' height='20' rx='2.5' fill='%2334d399'/%3E%3C/svg%3E">
+  <!-- Home-screen app: runs without browser chrome (iOS ignores the Fullscreen API on iPhone). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LD Remote">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -49,6 +56,12 @@
     <button id="btn-keymode" class="text-btn" title="Chế độ bàn phím: Văn bản gửi ký tự, Phím gửi mã phím thô (cho game)">Văn bản</button>
     <button id="btn-notify" title="Thanh thông báo" aria-label="Thanh thông báo"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></button>
   </nav>
+
+  <!-- Shown only in full-screen mode, where the top and bottom bars are hidden. -->
+  <div id="float-bar" class="float-bar">
+    <button id="float-back" title="Quay lại" aria-label="Quay lại"><svg viewBox="0 0 24 24"><path d="M16 5 7 12l9 7z"/></svg></button>
+    <button id="float-exit" title="Thoát toàn màn hình" aria-label="Thoát toàn màn hình"><svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 

@@ -212,6 +212,45 @@ svg {
 
 .toast[hidden] { display: none; }
 
+/* Home-screen app with a translucent status bar: keep the bars clear of the notch. */
+.bar { padding-top: calc(8px + env(safe-area-inset-top)); }
+
+/* Full-screen mode without the Fullscreen API (iPhone): hide the bars, let the stage fill the
+   screen (clear of the notch / home indicator), and float a small exit + back control. */
+.float-bar { display: none; }
+
+body.immersive .bar,
+body.immersive .nav { display: none; }
+
+body.immersive #stage {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+body.immersive .float-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: fixed;
+  right: calc(8px + env(safe-area-inset-right));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  opacity: 0.45;
+}
+
+body.immersive .float-bar:hover,
+body.immersive .float-bar:active { opacity: 1; }
+
+.float-bar button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(23, 26, 33, 0.85);
+}
+
 @media (max-width: 640px) {
   .stats { display: none; }
   .nav { gap: 6px; }
