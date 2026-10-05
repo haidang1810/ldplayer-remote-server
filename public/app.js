@@ -227,6 +227,7 @@ function connect(newDeviceId) {
   ws = sock;
   sock.onopen = () => {
     lastError = null;
+    flushDiag();
     lastMessageAt = performance.now();
     ping();
   };
@@ -254,6 +255,7 @@ setInterval(() => {
   if (ws?.readyState !== WebSocket.OPEN || !firstFrameShown || document.visibilityState !== 'visible') return;
   if (performance.now() - lastMessageAt > STALL_TIMEOUT_MS) {
     console.warn('stream stalled, reconnecting');
+    diag({ event: 'ws-stall', transport: rtcActive ? 'rtc' : 'ws' });
     lastError = 'mất tín hiệu';
     ws.close();
   }
@@ -455,6 +457,7 @@ function onFrame(frame) {
   }
   frame.close();
   stats.frames++;
+  markRendered();
   decodeErrors = 0;
   if (!videoW) {
     videoW = w;
@@ -547,6 +550,9 @@ function waitFirstRtcFrame(peer) {
     layout();
     firstFrameShown = true;
     overlay.hidden = true;
+    markRendered();
+    trackRtcFrames(peer);
+    diag({ event: 'rtc-connected' });
   };
   if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFirst);
   else video.addEventListener('playing', onFirst, { once: true });
@@ -571,7 +577,11 @@ function stopRtc(reason = null, notify = false) {
     wsJson({ type: 'rtc-stop' });
     rtcRetryAt = Date.now() + RTC_RETRY_MS;
   }
-  if (reason) toast(`${reason}, chuyển sang WebSocket`);
+  if (reason) {
+    toast(`${reason}, chuyển sang WebSocket`);
+    diag({ event: 'rtc-fallback', reason, path: rtcPathGuess });
+  }
+  renderTracking = false;
   if (wasActive && ws) {
     firstFrameShown = false;
     requestKeyframe();
@@ -594,6 +604,7 @@ async function rtcStatsLine() {
   const pair = pairId ? report.get(pairId) : null;
   const local = pair ? report.get(pair.localCandidateId) : null;
   const path = local?.candidateType === 'relay' ? 'TURN' : 'P2P';
+  rtcPathGuess = path;
   if (pair?.currentRoundTripTime !== undefined) rtt = pair.currentRoundTripTime * 1000;
   if (!inbound) return `WebRTC ${path} · đang chờ video`;
 
@@ -609,7 +620,17 @@ async function rtcStatsLine() {
   // Data arriving but nothing decoding: the decoder lost its reference, ask for a key frame.
   // Nothing arriving at all for a while: the path is dead, fall back to the WebSocket.
   rtcStalledSeconds = decoded === 0 ? rtcStalledSeconds + 1 : 0;
-  if (decoded === 0 && bytes > 0 && rtcStalledSeconds >= 2) requestKeyframe();
+  const received = (inbound.packetsReceived ?? 0) - (prev.packetsReceived ?? 0);
+  net = {
+    path,
+    fps: decoded,
+    mbps: Number(((bytes * 8) / 1e6).toFixed(2)),
+    lost,
+    lossPct: received + lost > 0 ? Number(((lost / (received + lost)) * 100).toFixed(1)) : 0,
+    rtt: rtt === null ? null : Math.round(rtt),
+    buffer: typeof buffer === 'number' ? buffer : null,
+  };
+  if (!renderTracking && decoded === 0 && bytes > 0 && rtcStalledSeconds >= 2) requestKeyframe();
   if (bytes === 0 && rtcStalledSeconds >= 5) stopRtc('Mất tín hiệu WebRTC', true);
 
   return `WebRTC ${path} · ${decoded} fps · ${((bytes * 8) / 1e6).toFixed(1)} Mbps · đệm ${buffer} ms · mất ${lost} gói · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
@@ -622,6 +643,82 @@ video.addEventListener('resize', () => {
   }
   layout();
 });
+
+// ---------------------------------------------------------------- freeze detection / diagnostics
+
+// scrcpy repeats the last frame every 100 ms on a static screen, so a healthy stream renders at
+// least ~10 frames/s. Longer than this without a rendered frame is a freeze: ask for a key frame
+// right away (and again every second while it lasts) instead of waiting for the stats tick.
+const FREEZE_MS = 500;
+const FREEZE_KEYFRAME_EVERY_MS = 1000;
+const SUMMARY_EVERY_MS = 60000;
+let lastRenderAt = 0;
+let renderTracking = false; // WebRTC: true once requestVideoFrameCallback reports frames
+let freeze = null; // { start, transport, keyframes, lastKeyAt }
+let rtcPathGuess = null;
+let net = {}; // latest network numbers from rtcStatsLine()
+const minute = { freezes: 0, freezeMs: 0 };
+const diagQueue = [];
+
+/** Sends a diagnostic event to the agent log (queued while the socket is reconnecting). */
+function diag(event) {
+  diagQueue.push({ type: 'diag', at: Date.now(), ...event });
+  if (diagQueue.length > 20) diagQueue.shift();
+  flushDiag();
+}
+
+function flushDiag() {
+  while (diagQueue.length && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(diagQueue.shift()));
+}
+
+function markRendered() {
+  const t = performance.now();
+  if (freeze) {
+    const f = freeze;
+    freeze = null;
+    const ms = Math.round(t - f.start);
+    minute.freezes++;
+    minute.freezeMs += ms;
+    diag({ event: 'freeze', ms, transport: f.transport, keyframes: f.keyframes, ...(f.transport === 'rtc' ? net : { rtt: rtt === null ? null : Math.round(rtt) }) });
+  }
+  lastRenderAt = t;
+}
+
+function trackRtcFrames(peer) {
+  if (!video.requestVideoFrameCallback) return;
+  renderTracking = true;
+  const onFrame = () => {
+    if (peer !== pc) return;
+    markRendered();
+    video.requestVideoFrameCallback(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
+setInterval(() => {
+  const watching = firstFrameShown && ws?.readyState === WebSocket.OPEN && document.visibilityState === 'visible' && (!rtcActive || renderTracking);
+  if (!watching) {
+    freeze = null;
+    return;
+  }
+  const t = performance.now();
+  if (!freeze && t - lastRenderAt > FREEZE_MS) {
+    freeze = { start: lastRenderAt, transport: rtcActive ? 'rtc' : 'ws', keyframes: 0, lastKeyAt: 0 };
+  }
+  if (freeze && t - freeze.lastKeyAt > FREEZE_KEYFRAME_EVERY_MS) {
+    freeze.lastKeyAt = t;
+    freeze.keyframes++;
+    requestKeyframe();
+  }
+}, 100);
+
+// Once a minute, a one-line summary of how the connection behaved.
+setInterval(() => {
+  if (!firstFrameShown || ws?.readyState !== WebSocket.OPEN) return;
+  diag({ event: 'summary', transport: rtcActive ? 'rtc' : 'ws', freezes: minute.freezes, freezeMs: minute.freezeMs, ...(rtcActive ? net : { rtt: rtt === null ? null : Math.round(rtt) }) });
+  minute.freezes = 0;
+  minute.freezeMs = 0;
+}, SUMMARY_EVERY_MS);
 
 // ---------------------------------------------------------------- pointer input
 
