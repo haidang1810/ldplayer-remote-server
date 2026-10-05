@@ -185,6 +185,9 @@ main() {
   step "Cập nhật mã nguồn ($APP_DIR)"
   backup_env
   update_code
+  # Create the shortcut right away so it exists even if a later step (e.g. certbot) fails.
+  chmod 755 "$APP_DIR/deploy/install.sh"
+  ln -sf "$APP_DIR/deploy/install.sh" "$DEPLOY_CMD"
   local changed=1
   [ "$PREV_COMMIT" = "$NEW_COMMIT" ] && changed=0
   if [ "$changed" = 1 ] || [ "$force" = 1 ] || [ ! -d "$APP_DIR/node_modules" ]; then
