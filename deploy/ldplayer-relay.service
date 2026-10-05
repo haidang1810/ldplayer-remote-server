@@ -1,0 +1,19 @@
+[Unit]
+Description=LDPlayer Remote relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ldremote
+WorkingDirectory=/opt/ldplayer-remote-server
+ExecStart=/usr/bin/node --env-file=/opt/ldplayer-remote-server/relay.env src/index.js
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

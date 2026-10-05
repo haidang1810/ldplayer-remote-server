@@ -1,0 +1,17 @@
+{
+  "name": "ldplayer-remote-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LDPlayer Remote relay: web UI + single-password login; PC agents connect out to it",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=relay.env src/index.js",
+    "setup": "node src/setup.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}
