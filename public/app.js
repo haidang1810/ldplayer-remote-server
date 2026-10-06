@@ -401,7 +401,7 @@ function onDecodeError(err) {
   decodeErrors++;
   if (decodeErrors >= 3 && hwPreference !== 'prefer-software') {
     hwPreference = 'prefer-software';
-    toast('Giải mã phần cứng lỗi, chuyển sang giải mã phần mềm');
+    diag({ event: 'decoder-fallback', reason: 'hardware decode failed, using software' });
   }
   resetDecoder();
   requestKeyframe();
@@ -579,10 +579,9 @@ function stopRtc(reason = null, notify = false) {
     wsJson({ type: 'rtc-stop' });
     rtcRetryAt = Date.now() + RTC_RETRY_MS;
   }
-  if (reason) {
-    toast(`${reason}, chuyển sang WebSocket`);
-    diag({ event: 'rtc-fallback', reason, path: rtcPathGuess });
-  }
+  // Switching transport is silent (a toast over the picture got in the way while playing);
+  // the reason still reaches the agent log.
+  if (reason) diag({ event: 'rtc-fallback', reason, path: rtcPathGuess });
   renderTracking = false;
   if (wasActive && ws) {
     firstFrameShown = false;
