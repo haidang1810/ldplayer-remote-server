@@ -24,6 +24,9 @@
     <button id="btn-fullscreen" class="icon-btn" title="Toàn màn hình" aria-label="Toàn màn hình">
       <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
     </button>
+    <a id="btn-account" class="icon-btn" href="account.html" title="Tài khoản, máy, API key" aria-label="Tài khoản" hidden>
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+    </a>
     <button id="btn-logout" class="icon-btn" title="Đăng xuất" aria-label="Đăng xuất" hidden>
       <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/></svg>
     </button>
@@ -37,8 +40,11 @@
     <div id="overlay" class="overlay">
       <div id="overlay-text">Đang tải…</div>
       <form id="login-form" class="login-form" hidden>
+        <input id="username-input" type="text" placeholder="Tên đăng nhập" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
         <input id="password-input" type="password" placeholder="Mật khẩu" autocomplete="current-password" required>
-        <button type="submit">Đăng nhập</button>
+        <input id="password2-input" type="password" placeholder="Nhập lại mật khẩu" autocomplete="new-password" hidden>
+        <button id="login-submit" type="submit">Đăng nhập</button>
+        <button id="login-switch" type="button" class="link-btn">Chưa có tài khoản? Đăng ký</button>
       </form>
     </div>
     <textarea id="ime" class="ime" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Bàn phím"></textarea>

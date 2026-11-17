@@ -39,7 +39,7 @@ function showOverlay(text, { askPassword = false } = {}) {
   overlayText.textContent = text;
   loginForm.hidden = !askPassword;
   overlay.hidden = false;
-  if (askPassword) $('password-input').focus();
+  if (askPassword) ($('username-input').value ? $('password-input') : $('username-input')).focus();
 }
 
 let toastTimer = null;
@@ -65,23 +65,63 @@ new ResizeObserver(layout).observe(stage);
 
 // ---------------------------------------------------------------- login
 
-async function login(password) {
-  const res = await fetch('/api/login', {
+async function postJson(url, body) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify(body),
   });
-  if (res.ok) return null;
-  return (await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`;
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? { data } : { error: data.error ?? `HTTP ${res.status}` };
 }
+
+let registerMode = false;
+let allowRegister = true;
+
+function setRegisterMode(on) {
+  registerMode = on && allowRegister;
+  $('password2-input').hidden = !registerMode;
+  $('password2-input').required = registerMode;
+  $('password-input').autocomplete = registerMode ? 'new-password' : 'current-password';
+  $('login-submit').textContent = registerMode ? 'Đăng ký' : 'Đăng nhập';
+  $('login-switch').textContent = registerMode ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký';
+  $('login-switch').hidden = !allowRegister;
+}
+
+fetch('/api/config')
+  .then((r) => r.json())
+  .then((c) => {
+    allowRegister = c.allowRegister !== false;
+    // Fresh server: the first account becomes the admin, so open straight on the sign-up form.
+    setRegisterMode(c.hasUsers === false);
+    if (c.hasUsers === false && !loginForm.hidden) overlayText.textContent = 'Tạo tài khoản admin đầu tiên.';
+  })
+  .catch(() => {});
+
+$('login-switch').addEventListener('click', () => {
+  setRegisterMode(!registerMode);
+  overlayText.textContent = registerMode ? 'Tạo tài khoản mới (cần admin duyệt).' : 'Đăng nhập để vào.';
+});
 
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const input = $('password-input');
-  const error = await login(input.value);
-  input.value = '';
-  if (error) showOverlay(error, { askPassword: true });
-  else refreshDevices();
+  const username = $('username-input').value.trim();
+  const pw = $('password-input');
+  const pw2 = $('password2-input');
+  if (registerMode && pw.value !== pw2.value) {
+    showOverlay('Hai lần nhập mật khẩu không khớp.', { askPassword: true });
+    return;
+  }
+  const { data, error } = await postJson(registerMode ? '/api/register' : '/api/login', { username, password: pw.value });
+  pw.value = '';
+  pw2.value = '';
+  if (error) return showOverlay(error, { askPassword: true });
+  if (registerMode && data.status === 'pending') {
+    setRegisterMode(false);
+    return showOverlay('Đã đăng ký. Tài khoản cần admin duyệt, sau đó đăng nhập lại.', { askPassword: true });
+  }
+  setRegisterMode(false);
+  refreshDevices();
 });
 
 logoutBtn.addEventListener('click', async () => {
@@ -90,6 +130,7 @@ logoutBtn.addEventListener('click', async () => {
   lastDevicesSignature = null;
   deviceSelect.replaceChildren();
   logoutBtn.hidden = true;
+  $('btn-account').hidden = true;
   setStatus('idle', 'Đã đăng xuất');
   showOverlay('Đã đăng xuất.', { askPassword: true });
 });
@@ -1000,10 +1041,11 @@ function deviceLabel(d, multiAgent) {
   return `${agent}${d.name}${index}${state}`;
 }
 
-function requireLogin(message = 'Nhập mật khẩu để vào.') {
+function requireLogin(message = 'Đăng nhập để vào.') {
   clearTimeout(devicesTimer);
   connect(null);
   logoutBtn.hidden = true;
+  $('btn-account').hidden = true;
   setStatus('idle', 'Chưa đăng nhập');
   showOverlay(message, { askPassword: true });
 }
@@ -1034,6 +1076,7 @@ async function refreshDevices() {
     return;
   }
   logoutBtn.hidden = false;
+  $('btn-account').hidden = false;
 
   const { devices, agents } = body;
   const multiAgent = (agents?.length ?? 0) > 1;
@@ -1062,7 +1105,9 @@ async function refreshDevices() {
     connect(null);
     setStatus('idle', 'Chưa có máy ảo');
     let message = 'Không tìm thấy máy ảo LDPlayer / thiết bị adb nào.';
-    if (agents && agents.length === 0) message = 'PC chưa kết nối tới relay (agent đang offline).';
+    if (agents && agents.length === 0) {
+      message = 'Chưa có PC nào online. Vào Tài khoản (biểu tượng người ở góc trên) để tạo API key rồi nhập vào app trên PC.';
+    }
     else if (devices.length) {
       message = 'Chưa có máy ảo nào bật ADB. Trong LDPlayer: Cài đặt → Cài đặt khác → Gỡ lỗi ADB → "Mở kết nối cục bộ", lưu rồi khởi động lại máy ảo.';
     }
@@ -1085,14 +1130,6 @@ async function init() {
         : 'WebCodecs chỉ chạy trên https hoặc localhost. Hãy mở trang bằng https://…',
     );
     return;
-  }
-  // Local mode prints a ?token= link; exchange it for a session cookie and drop it from the URL.
-  const token = params.get('token');
-  if (token) {
-    params.delete('token');
-    const qs = params.toString();
-    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
-    await login(token);
   }
   refreshDevices();
 }

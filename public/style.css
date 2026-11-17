@@ -161,12 +161,17 @@ svg {
 
 .login-form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  justify-content: center;
+  width: min(280px, 100%);
+  margin: 0 auto;
 }
 
-.login-form[hidden], .icon-btn[hidden] { display: none; }
-.login-form input { padding: 8px 10px; min-width: 0; width: 220px; }
+.login-form[hidden], .login-form [hidden], .icon-btn[hidden] { display: none; }
+.login-form input { padding: 10px 12px; min-width: 0; width: 100%; font-size: 16px; /* no iOS zoom */ }
+.login-form button[type="submit"] { padding: 10px; background: var(--accent); color: #062b1e; border-color: transparent; font-weight: 600; }
+.link-btn { background: none; border: none; color: var(--muted); text-decoration: underline; padding: 4px; }
+a.icon-btn { color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
 
 /* Off-screen input that receives keyboard/IME text; kept focusable so phones show a keyboard. */
 .ime {

@@ -1,15 +1,15 @@
 {
   "name": "ldplayer-remote-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "LDPlayer Remote relay: web UI + single-password login; PC agents connect out to it",
+  "description": "LDPlayer Remote relay: web UI with accounts (SQLite); PC agents connect out to it with per-user API keys",
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=relay.env src/index.js",
-    "setup": "node src/setup.js"
+    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning --env-file-if-exists=relay.env src/index.js",
+    "admin": "node --experimental-sqlite --disable-warning=ExperimentalWarning --env-file-if-exists=relay.env src/setup.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.5"
   },
   "dependencies": {
     "ws": "^8.22.0"

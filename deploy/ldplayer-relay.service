@@ -7,9 +7,12 @@ Wants=network-online.target
 Type=simple
 User=ldremote
 WorkingDirectory=/opt/ldplayer-remote-server
-ExecStart=/usr/bin/node --env-file=/opt/ldplayer-remote-server/relay.env src/index.js
+ExecStart=/usr/bin/node --experimental-sqlite --disable-warning=ExperimentalWarning --env-file=/opt/ldplayer-remote-server/relay.env src/index.js
 Restart=always
 RestartSec=2
+# SQLite database (accounts, API keys, PCs) lives in /var/lib/ldplayer-relay, outside the code.
+StateDirectory=ldplayer-relay
+StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
