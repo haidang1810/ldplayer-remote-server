@@ -617,6 +617,10 @@ async function rtcStatsLine() {
   const emitted = (inbound.jitterBufferEmittedCount ?? 0) - (prev.jitterBufferEmittedCount ?? 0);
   const buffer = emitted > 0 ? Math.round((((inbound.jitterBufferDelay ?? 0) - (prev.jitterBufferDelay ?? 0)) / emitted) * 1000) : '–';
   const lost = (inbound.packetsLost ?? 0) - (prev.packetsLost ?? 0);
+  const show = displayLag.count ? Math.round(displayLag.sum / displayLag.count) : null;
+  displayLag.sum = displayLag.count = 0;
+  // Frames received but not yet decoded or dropped: a decoder falling behind.
+  const backlog = (inbound.framesReceived ?? 0) - (inbound.framesDecoded ?? 0) - (inbound.framesDropped ?? 0);
 
   // Data arriving but nothing decoding: the decoder lost its reference, ask for a key frame.
   // Nothing arriving at all for a while: the path is dead, fall back to the WebSocket.
@@ -630,13 +634,15 @@ async function rtcStatsLine() {
     lossPct: received + lost > 0 ? Number(((lost / (received + lost)) * 100).toFixed(1)) : 0,
     rtt: rtt === null ? null : Math.round(rtt),
     buffer: typeof buffer === 'number' ? buffer : null,
+    show,
+    backlog,
   };
   // The agent sends at full rate and only backs off on loss the browser sees.
   wsJson({ type: 'rtc-net', lost: Math.max(0, lost), lossPct: net.lossPct });
   if (!renderTracking && decoded === 0 && bytes > 0 && rtcStalledSeconds >= 2) requestKeyframe();
   if (bytes === 0 && rtcStalledSeconds >= 5) stopRtc('Mất tín hiệu WebRTC', true);
 
-  return `WebRTC ${path} · ${decoded} fps · ${((bytes * 8) / 1e6).toFixed(1)} Mbps · đệm ${buffer} ms · mất ${lost} gói · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
+  return `WebRTC ${path} · ${decoded} fps · ${((bytes * 8) / 1e6).toFixed(1)} Mbps · đệm ${buffer} ms · hiển thị ${show ?? '–'} ms${backlog > 2 ? ` · chờ giải mã ${backlog}` : ''} · mất ${lost} gói · RTT ${rtt === null ? '–' : rtt.toFixed(0)} ms · ${videoW}×${videoH}`;
 }
 
 video.addEventListener('resize', () => {
@@ -660,6 +666,7 @@ let renderTracking = false; // WebRTC: true once requestVideoFrameCallback repor
 let freeze = null; // { start, transport, keyframes, lastKeyAt }
 let rtcPathGuess = null;
 let net = {}; // latest network numbers from rtcStatsLine()
+const displayLag = { sum: 0, count: 0 };
 const minute = { freezes: 0, freezeMs: 0 };
 const diagQueue = [];
 
@@ -690,9 +697,15 @@ function markRendered() {
 function trackRtcFrames(peer) {
   if (!video.requestVideoFrameCallback) return;
   renderTracking = true;
-  const onFrame = () => {
+  const onFrame = (_now, meta) => {
     if (peer !== pc) return;
     markRendered();
+    // How long the browser held the frame between receiving it and showing it (decode + render
+    // queue). A slow or stuck decoder shows up here even when the network numbers look clean.
+    if (meta?.receiveTime) {
+      displayLag.sum += meta.expectedDisplayTime - meta.receiveTime;
+      displayLag.count++;
+    }
     video.requestVideoFrameCallback(onFrame);
   };
   video.requestVideoFrameCallback(onFrame);
