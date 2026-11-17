@@ -565,7 +565,7 @@ export async function openAppsDialog(d) {
               'div',
               { class: 'app-row' },
               el('div', { class: 'app-ico', 'aria-hidden': 'true' }, (a.label || a.package).trim().charAt(0).toUpperCase()),
-              el('div', { class: 'app-name' }, el('div', {}, a.label || a.package), el('small', {}, a.package)),
+              el('div', { class: 'app-name' }, el('div', {}, a.label || a.package), a.label ? el('small', {}, a.package) : null),
               el('button', { type: 'button', class: 'btn sm', title: 'Mở', 'aria-label': `Mở ${a.label || a.package}`, onclick: () => appAction(a, 'launch').catch(() => {}) }, icon('play')),
               el('button', { type: 'button', class: 'btn sm icon', title: 'Dừng', 'aria-label': `Dừng ${a.label || a.package}`, onclick: () => appAction(a, 'stop').catch(() => {}) }, icon('stop')),
               el('button', { type: 'button', class: 'btn sm icon danger', title: 'Gỡ cài đặt', 'aria-label': `Gỡ ${a.label || a.package}`, onclick: () => appAction(a, 'uninstall').catch(() => {}) }, icon('trash')),

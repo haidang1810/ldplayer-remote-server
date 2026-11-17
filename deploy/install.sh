@@ -202,8 +202,9 @@ configure_nginx() {
   local render=(-e "s/__DOMAIN__/$DOMAIN/g" -e "s/__PORT__/$PORT/g")
 
   if [ -f "$conf" ] && grep -q ssl_certificate "$conf"; then
-    # HTTPS already set up: only keep the upstream port in sync.
+    # HTTPS already set up: only keep the upstream port in sync (and allow APK uploads).
     sed -i "s#proxy_pass http://127.0.0.1:[0-9]*;#proxy_pass http://127.0.0.1:$PORT;#" "$conf"
+    grep -q client_max_body_size "$conf" || sed -i "s#proxy_request_buffering off;#proxy_request_buffering off;\n        client_max_body_size 2g;#" "$conf"
     nginx -t
     systemctl reload nginx
     return
