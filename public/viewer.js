@@ -291,7 +291,7 @@ function onJson(msg) {
     case 'status':
       if (msg.state === 'starting') {
         setStatus('starting', 'Đang khởi động');
-        showOverlay('Đang khởi động scrcpy-server trên máy ảo…');
+        showOverlay('Đang khởi động luồng hình…');
       } else if (msg.state === 'stopped') {
         lastError = msg.message || 'luồng đã dừng';
       }

@@ -225,7 +225,8 @@ export function modal({ title, text, iconName, danger = false, body = [], action
       result = v;
       dlg.close();
     };
-    form.append(
+    // Native append() would turn a null part into the text "null"; drop the missing parts.
+    const parts = [
       el(
         'div',
         { class: 'modal-head' },
@@ -253,7 +254,8 @@ export function modal({ title, text, iconName, danger = false, body = [], action
             ),
           )
         : null,
-    );
+    ];
+    form.append(...parts.filter(Boolean));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!onSubmit) return close(true);
