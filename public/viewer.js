@@ -1,6 +1,14 @@
-// Web client. Video arrives over WebRTC (RTP, played by a <video> element) when it can connect,
+// Phone viewer. Video arrives over WebRTC (RTP, played by a <video> element) when it can connect,
 // otherwise over the WebSocket (H.264 decoded with WebCodecs onto a canvas). Pointer/keyboard input
 // becomes scrcpy control messages (big-endian, see src/scrcpy.js in ldplayer-remote-client).
+// The streaming/input core below is the former app.js, unchanged; only the page chrome around it
+// (overlay, toolbar, device switcher, login redirect) is new.
+import {
+  el, icon, hydrateIcons, toast as uiToast, modal, confirmDialog, openMenu, openApkDialog, openAppsDialog,
+  deviceState, isInstance, instanceAction, setUnauthorizedHandler, STATE_LABEL,
+} from './common.js';
+
+hydrateIcons();
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
@@ -10,13 +18,11 @@ const surface = $('surface');
 const video = $('video');
 const overlay = $('overlay');
 const overlayText = $('overlay-text');
-const loginForm = $('login-form');
-const logoutBtn = $('btn-logout');
+const overlayActions = $('overlay-actions');
+const overlaySpinner = $('overlay-spinner');
 const statusEl = $('status');
 const statsEl = $('stats');
-const deviceSelect = $('device');
 const ime = $('ime');
-const toastEl = $('toast');
 
 const params = new URLSearchParams(location.search);
 const nowMs = () => performance.timeOrigin + performance.now();
@@ -32,22 +38,35 @@ function storageSet(key, value) {
 
 function setStatus(state, text) {
   statusEl.dataset.state = state;
-  statusEl.textContent = text;
+  // While live the header already names the device; the chip just says so.
+  statusEl.textContent = state === 'live' ? 'Trực tiếp' : text;
+  statusEl.title = text;
 }
 
-function showOverlay(text, { askPassword = false } = {}) {
+/**
+ * Overlay over the stream. `actions`: buttons ([{ label, onClick, primary, icon }]); a spinner shows
+ * while waiting (no actions, `busy` not false).
+ */
+let overlaySig = null;
+function showOverlay(text, { actions = [], busy = actions.length === 0 } = {}) {
+  // Polling re-shows the same state every few seconds: keep the buttons (and their focus) then.
+  const sig = JSON.stringify([text, busy, actions.map((a) => a.label)]);
+  if (!overlay.hidden && sig === overlaySig) return;
+  overlaySig = sig;
   overlayText.textContent = text;
-  loginForm.hidden = !askPassword;
+  overlaySpinner.hidden = !busy;
+  overlayActions.replaceChildren(
+    ...actions.map((a) =>
+      a.href
+        ? el('a', { class: `btn ${a.primary ? 'primary' : ''}`, href: a.href }, a.icon && icon(a.icon), a.label)
+        : el('button', { class: `btn ${a.primary ? 'primary' : ''}`, type: 'button', onclick: a.onClick }, a.icon && icon(a.icon), a.label),
+    ),
+  );
   overlay.hidden = false;
-  if (askPassword) ($('username-input').value ? $('password-input') : $('username-input')).focus();
 }
 
-let toastTimer = null;
 function toast(text, ms = 2500) {
-  toastEl.textContent = text;
-  toastEl.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toastEl.hidden = true), ms);
+  uiToast(text, 'info', ms);
 }
 
 function layout() {
@@ -65,73 +84,11 @@ new ResizeObserver(layout).observe(stage);
 
 // ---------------------------------------------------------------- login
 
-async function postJson(url, body) {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  return res.ok ? { data } : { error: data.error ?? `HTTP ${res.status}` };
+// Login lives on the dashboard; come back here afterwards.
+function goLogin() {
+  location.href = `./?next=${encodeURIComponent(`viewer.html${location.search}`)}`;
 }
-
-let registerMode = false;
-let allowRegister = true;
-
-function setRegisterMode(on) {
-  registerMode = on && allowRegister;
-  $('password2-input').hidden = !registerMode;
-  $('password2-input').required = registerMode;
-  $('password-input').autocomplete = registerMode ? 'new-password' : 'current-password';
-  $('login-submit').textContent = registerMode ? 'Đăng ký' : 'Đăng nhập';
-  $('login-switch').textContent = registerMode ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký';
-  $('login-switch').hidden = !allowRegister;
-}
-
-fetch('/api/config')
-  .then((r) => r.json())
-  .then((c) => {
-    allowRegister = c.allowRegister !== false;
-    setRegisterMode(false);
-  })
-  .catch(() => {});
-
-$('login-switch').addEventListener('click', () => {
-  setRegisterMode(!registerMode);
-  overlayText.textContent = registerMode ? 'Tạo tài khoản mới (cần admin duyệt).' : 'Đăng nhập để vào.';
-});
-
-loginForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const username = $('username-input').value.trim();
-  const pw = $('password-input');
-  const pw2 = $('password2-input');
-  if (registerMode && pw.value !== pw2.value) {
-    showOverlay('Hai lần nhập mật khẩu không khớp.', { askPassword: true });
-    return;
-  }
-  const { data, error } = await postJson(registerMode ? '/api/register' : '/api/login', { username, password: pw.value });
-  pw.value = '';
-  pw2.value = '';
-  if (error) return showOverlay(error, { askPassword: true });
-  if (registerMode && data.status === 'pending') {
-    setRegisterMode(false);
-    return showOverlay('Đã đăng ký. Tài khoản cần admin duyệt, sau đó đăng nhập lại.', { askPassword: true });
-  }
-  setRegisterMode(false);
-  refreshDevices();
-});
-
-logoutBtn.addEventListener('click', async () => {
-  await fetch('/api/logout', { method: 'POST' });
-  connect(null);
-  lastDevicesSignature = null;
-  deviceSelect.replaceChildren();
-  logoutBtn.hidden = true;
-  $('btn-account').hidden = true;
-  setStatus('idle', 'Đã đăng xuất');
-  showOverlay('Đã đăng xuất.', { askPassword: true });
-});
+setUnauthorizedHandler(goLogin);
 
 // ---------------------------------------------------------------- control messages
 
@@ -343,9 +300,13 @@ function onJson(msg) {
       onPong(msg);
       break;
     case 'clipboard':
+      if (clipboardSink) {
+        clipboardSink(msg.text);
+        break;
+      }
       navigator.clipboard?.writeText(msg.text).then(
         () => toast('Đã chép từ máy ảo vào clipboard'),
-        () => toast('Không ghi được clipboard của trình duyệt'),
+        () => openClipboardDialog(msg.text), // no user gesture any more: show it to copy by hand
       );
       break;
   }
@@ -881,12 +842,13 @@ function renderKeyMode() {
   keyModeBtn.setAttribute('aria-pressed', String(keyMode === 'raw'));
 }
 renderKeyMode();
-keyModeBtn.addEventListener('click', () => {
+function toggleKeyMode() {
   keyMode = keyMode === 'raw' ? 'text' : 'raw';
   storageSet('ldr-keymode', keyMode);
   renderKeyMode();
   toast(keyMode === 'raw' ? 'Phím game: gửi mã phím thô (WASD…)' : 'Văn bản: gửi ký tự, hỗ trợ tiếng Việt');
-});
+}
+keyModeBtn.addEventListener('click', toggleKeyMode);
 
 // The textarea keeps one sentinel character so phone keyboards still emit a delete when "empty".
 const SENTINEL = '_';
@@ -965,10 +927,10 @@ ime.addEventListener('paste', (e) => {
 
 // ---------------------------------------------------------------- toolbar
 
-const nav = $('nav');
-nav.addEventListener('mousedown', (e) => e.preventDefault()); // keep keyboard focus on the device
+// Desktop side toolbar and mobile bottom bar: keep keyboard focus on the device.
+for (const bar of document.querySelectorAll('.keep-focus')) bar.addEventListener('mousedown', (e) => e.preventDefault());
 
-for (const btn of nav.querySelectorAll('button[data-key]')) {
+for (const btn of document.querySelectorAll('.keep-focus button[data-key]')) {
   const keycode = Number(btn.dataset.key);
   let down = false;
   btn.addEventListener('pointerdown', (e) => {
@@ -987,6 +949,7 @@ for (const btn of nav.querySelectorAll('button[data-key]')) {
 }
 
 $('btn-keyboard').addEventListener('click', () => ime.focus());
+$('m-keyboard').addEventListener('click', () => ime.focus());
 $('btn-notify').addEventListener('click', () => send(simpleMsg(MSG.EXPAND_NOTIFICATION_PANEL)));
 // Real fullscreen where the browser allows it (desktop, Android, iPad). iPhone Safari has no
 // Fullscreen API for pages, so there (and if the request fails) hide the bars instead; opened
@@ -1027,32 +990,356 @@ $('float-bar').addEventListener('mousedown', (e) => e.preventDefault()); // keep
 const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 if (standalone && storageGet('ldr-immersive') === '1') setImmersive(true);
 
+const isFullscreen = () => !!fullscreenApi.element() || document.body.classList.contains('immersive');
+function renderFullscreenBtn() {
+  $('btn-fullscreen').replaceChildren(icon(isFullscreen() ? 'exitFullscreen' : 'fullscreen'));
+}
+document.addEventListener('fullscreenchange', renderFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', renderFullscreenBtn);
+
+// ---------------------------------------------------------------- extra tools
+
+const MSG_ROTATE_DEVICE = 11;
+const COPY_KEY_NONE = 0;
+let clipboardSink = null; // set while the clipboard dialog waits for the device's clipboard
+
+function rotate() {
+  send(simpleMsg(MSG_ROTATE_DEVICE));
+}
+
+/** Saves the current frame as a PNG (local, no server round trip). */
+function screenshot() {
+  const src = rtcActive ? video : canvas;
+  const w = rtcActive ? video.videoWidth : canvas.width;
+  const h = rtcActive ? video.videoHeight : canvas.height;
+  if (!firstFrameShown || !w || !h) return toast('Chưa có hình để chụp.');
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  c.getContext('2d').drawImage(src, 0, 0, w, h);
+  c.toBlob((blob) => {
+    if (!blob) return toast('Không chụp được màn hình.');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    const a = el('a', { href: URL.createObjectURL(blob), download: `${(current?.name ?? 'man-hinh').replace(/[^\p{L}\p{N}._-]+/gu, '_')}-${stamp}.png` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Đã lưu ảnh chụp màn hình.');
+  }, 'image/png');
+}
+
+function openClipboardDialog(initial = '') {
+  const text = el('textarea', { class: 'input clip-text', 'aria-label': 'Nội dung clipboard', placeholder: 'Dán hoặc gõ nội dung cần gửi sang điện thoại…' });
+  text.value = initial;
+  const fromPc = el('button', {
+    class: 'btn', type: 'button',
+    onclick: async () => {
+      try {
+        text.value = await navigator.clipboard.readText();
+      } catch {
+        uiToast('Trình duyệt không cho đọc clipboard. Hãy dán (Ctrl+V) vào ô trên.', 'info', 4000);
+        text.focus();
+      }
+    },
+  }, icon('download'), 'Lấy từ máy tính');
+  const fromPhone = el('button', {
+    class: 'btn', type: 'button',
+    onclick: () => {
+      clipboardSink = (t) => {
+        text.value = t;
+        uiToast('Đã lấy clipboard của điện thoại.', 'ok');
+      };
+      send(simpleMsg(MSG.GET_CLIPBOARD, COPY_KEY_NONE));
+    },
+  }, icon('phone'), 'Lấy từ điện thoại');
+  const copyOut = el('button', {
+    class: 'btn', type: 'button',
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(text.value);
+        uiToast('Đã chép vào clipboard máy tính.', 'ok');
+      } catch {
+        text.select();
+        uiToast('Không chép tự động được, nội dung đã được bôi đen.', 'info', 4000);
+      }
+    },
+  }, icon('copy'), 'Chép ra máy tính');
+  return modal({
+    title: 'Clipboard',
+    text: 'Chuyển chữ qua lại giữa máy tính và điện thoại (có tiếng Việt).',
+    iconName: 'clipboard',
+    wide: true,
+    body: [text, el('div', { class: 'clip-actions' }, fromPc, fromPhone, copyOut)],
+    actions: [
+      { label: 'Đóng', value: null, kind: 'ghost' },
+      { label: 'Gửi vào clipboard', value: 'set', kind: '' },
+      { label: 'Dán vào điện thoại', value: 'paste', kind: 'primary', icon: 'clipboard' },
+    ],
+  }).then((v) => {
+    clipboardSink = null;
+    if (v && text.value) {
+      send(clipboardMsg(text.value, v === 'paste'));
+      uiToast(v === 'paste' ? 'Đã dán vào điện thoại.' : 'Đã gửi vào clipboard điện thoại.', 'ok');
+    }
+    ime.focus({ preventScroll: true });
+  });
+}
+
+const needInstance = (fn) => () => {
+  if (!current || !isInstance(current)) return uiToast('Chưa chọn máy.', 'info');
+  return fn(current);
+};
+
+async function powerAction(action) {
+  if (!current || !isInstance(current)) return;
+  const labels = { reboot: 'Khởi động lại', quit: 'Tắt máy', launch: 'Bật máy' };
+  if (action !== 'launch') {
+    const ok = await confirmDialog({ title: `${labels[action]} “${current.name}”?`, text: action === 'quit' ? 'Máy ảo sẽ đóng trên PC, phiên điều khiển kết thúc.' : 'Màn hình sẽ mất trong lúc máy khởi động lại.', confirm: labels[action], danger: action === 'quit', iconName: action === 'quit' ? 'power' : 'restart' });
+    if (!ok) return;
+  }
+  try {
+    await instanceAction(current, action);
+    setTimeout(refreshDevices, 3000);
+  } catch { /* toasted */ }
+}
+
+const statsOn = () => document.body.classList.contains('show-stats');
+function setStats(on) {
+  document.body.classList.toggle('show-stats', on);
+  $('btn-stats').setAttribute('aria-pressed', String(on));
+  storageSet('ldr-stats', on ? '1' : '0');
+}
+setStats(storageGet('ldr-stats') === '1');
+$('btn-stats').addEventListener('click', () => setStats(!statsOn()));
+
+function setPanel(on) {
+  document.body.classList.toggle('panel-off', !on);
+  $('btn-panel').setAttribute('aria-pressed', String(on));
+  storageSet('ldr-panel', on ? '1' : '0');
+}
+setPanel(storageGet('ldr-panel') !== '0');
+$('btn-panel').addEventListener('click', () => setPanel(document.body.classList.contains('panel-off')));
+
+/** Reloads with a transport / decoder override (the stream core reads them from the URL once). */
+function setUrlParam(key, value) {
+  const p = new URLSearchParams(location.search);
+  if (value === null) p.delete(key);
+  else p.set(key, value);
+  location.search = p.toString();
+}
+
+function qualityItems() {
+  const rtcOff = params.get('rtc') === '0';
+  const sw = params.get('hw') === 'prefer-software';
+  return [
+    { title: 'Kết nối' },
+    { label: 'Tự động (WebRTC khi được)', icon: rtcOff ? 'blank' : 'check', onClick: () => rtcOff && setUrlParam('rtc', null) },
+    { label: 'Chỉ WebSocket (ổn định qua proxy)', icon: rtcOff ? 'check' : 'blank', onClick: () => !rtcOff && setUrlParam('rtc', '0') },
+    { title: 'Giải mã' },
+    { label: 'Tự động (phần cứng)', icon: sw ? 'blank' : 'check', onClick: () => sw && setUrlParam('hw', null) },
+    { label: 'Phần mềm (khi hình bị lỗi)', icon: sw ? 'check' : 'blank', onClick: () => !sw && setUrlParam('hw', 'prefer-software') },
+  ];
+}
+
+function powerItems() {
+  const inst = !!current && isInstance(current);
+  return [
+    { label: 'Khởi động lại máy', icon: 'restart', disabled: !inst, onClick: () => powerAction('reboot') },
+    { label: 'Tắt máy', icon: 'power', danger: true, disabled: !inst, onClick: () => powerAction('quit') },
+  ];
+}
+
+$('btn-rotate').addEventListener('click', rotate);
+$('btn-clipboard').addEventListener('click', () => openClipboardDialog());
+$('btn-shot').addEventListener('click', screenshot);
+$('btn-apk').addEventListener('click', needInstance(openApkDialog));
+$('btn-apps').addEventListener('click', needInstance(openAppsDialog));
+$('btn-power').addEventListener('click', (e) => openMenu(e.currentTarget, [...powerItems(), '-', ...qualityItems(), '-', { label: statsOn() ? 'Ẩn thông số kết nối' : 'Hiện thông số kết nối', icon: 'stats', onClick: () => setStats(!statsOn()) }]));
+
+// Mobile "more" sheet (and the header ⋯ on desktop): everything the side toolbar has.
+function openMoreMenu(anchor) {
+  openMenu(
+    anchor,
+    [
+      { label: 'Tăng âm lượng', icon: 'volUp', onClick: () => tapKey(24) },
+      { label: 'Giảm âm lượng', icon: 'volDown', onClick: () => tapKey(25) },
+      { label: 'Xoay màn hình', icon: 'rotate', onClick: rotate },
+      { label: 'Thanh thông báo', icon: 'bell', onClick: () => send(simpleMsg(MSG.EXPAND_NOTIFICATION_PANEL)) },
+      { label: keyMode === 'raw' ? 'Bàn phím: Phím game' : 'Bàn phím: Văn bản', icon: 'keyboard', hint: 'đổi', onClick: toggleKeyMode },
+      { label: 'Clipboard', icon: 'clipboard', onClick: () => openClipboardDialog() },
+      '-',
+      { label: 'Cài APK', icon: 'apk', onClick: needInstance(openApkDialog) },
+      { label: 'Ứng dụng đã cài', icon: 'apps', onClick: needInstance(openAppsDialog) },
+      { label: 'Chụp màn hình', icon: 'camera', onClick: screenshot },
+      { label: isFullscreen() ? 'Thoát toàn màn hình' : 'Toàn màn hình', icon: 'fullscreen', onClick: () => toggleFullscreen().then(renderFullscreenBtn) },
+      '-',
+      ...powerItems(),
+      '-',
+      ...qualityItems(),
+      '-',
+      { label: 'Về bảng điều khiển', icon: 'chevronLeft', onClick: () => (location.href = './') },
+    ],
+    { sheetTitle: current?.name ?? 'Điều khiển' },
+  );
+}
+$('m-more').addEventListener('click', (e) => openMoreMenu(e.currentTarget));
+$('btn-more-top').addEventListener('click', (e) => openMoreMenu(e.currentTarget));
+$('btn-fullscreen').addEventListener('click', () => setTimeout(renderFullscreenBtn, 300));
+$('float-exit').addEventListener('click', () => setTimeout(renderFullscreenBtn, 300));
+
+// Keyboard shortcuts while the device has focus are sent to the device; these work elsewhere.
+document.addEventListener('keydown', (e) => {
+  if (e.target === ime || e.target.closest?.('input, textarea, select, dialog')) return;
+  if (e.key === 'Escape' && document.body.classList.contains('immersive')) setImmersive(false), renderFullscreenBtn();
+});
+
 // ---------------------------------------------------------------- devices
 
 let devicesTimer = null;
-let lastDevicesSignature = null;
+let devices = [];
+let current = null; // device record being viewed (or wanted while it is off)
+let launchingAt = 0;
+let lastSwitcherSig = null;
 
-function deviceLabel(d, multiAgent) {
-  const agent = multiAgent && d.agent ? `${d.agent} · ` : '';
-  const index = d.index !== null ? ` #${d.index}` : '';
-  const state = !d.running ? ' — đang tắt' : !d.adb ? ' — chưa bật ADB' : '';
-  return `${agent}${d.name}${index}${state}`;
+const urlParams = () => new URLSearchParams(location.search);
+
+/** The device this page is about: by stream id, else by PC + instance index (the id vanishes when off). */
+function findWanted() {
+  const p = urlParams();
+  const id = deviceId ?? p.get('device');
+  const m = p.get('m');
+  const i = p.get('i');
+  return (
+    (id && devices.find((d) => d.id === id)) ||
+    (m !== null && i !== null && devices.find((d) => String(d.machine) === m && String(d.index) === i)) ||
+    null
+  );
 }
 
-function requireLogin(message = 'Đăng nhập để vào.') {
-  clearTimeout(devicesTimer);
-  connect(null);
-  logoutBtn.hidden = true;
-  $('btn-account').hidden = true;
-  setStatus('idle', 'Chưa đăng nhập');
-  showOverlay(message, { askPassword: true });
+function renderHeader() {
+  $('dev-name').textContent = current?.name ?? 'Chọn máy';
+  $('dev-sub').textContent = current ? `${current.agent ?? 'PC'}${current.index !== null && current.index !== undefined ? ` · #${current.index}` : ''}` : '';
+  document.title = `${current?.name ?? 'Điều khiển'} · LD Remote`;
 }
+
+function selectDevice(d) {
+  const p = urlParams();
+  if (d.id) p.set('device', d.id);
+  else p.delete('device');
+  if (isInstance(d)) {
+    p.set('m', String(d.machine));
+    p.set('i', String(d.index));
+  } else {
+    p.delete('m');
+    p.delete('i');
+  }
+  history.replaceState(null, '', `?${p}`);
+  if (d.id) storageSet('ldr-device', d.id);
+  current = d;
+  launchingAt = 0;
+  renderHeader();
+  lastSwitcherSig = null;
+  renderSwitcher();
+  if (deviceState(d) === 'live') {
+    if (deviceId !== d.id) connect(d.id);
+  } else {
+    connect(null);
+    showDeviceState(d);
+  }
+}
+
+function showDeviceState(d) {
+  const s = deviceState(d);
+  if (s === 'off' && Date.now() - launchingAt < 90e3) {
+    setStatus('starting', 'Đang bật máy');
+    return showOverlay(`Đang khởi động “${d.name}”…`);
+  }
+  setStatus('idle', STATE_LABEL[s]);
+  const back = { label: 'Về bảng điều khiển', href: './' };
+  const other = { label: 'Chọn máy khác', icon: 'layers', onClick: (e) => openDeviceMenu(e.currentTarget) };
+  if (s === 'off') {
+    showOverlay(`“${d.name}” đang tắt.`, {
+      actions: [
+        isInstance(d) && {
+          label: 'Bật máy',
+          icon: 'power',
+          primary: true,
+          onClick: async () => {
+            try {
+              await instanceAction(d, 'launch');
+              launchingAt = Date.now();
+              showDeviceState(d);
+              setTimeout(refreshDevices, 3000);
+            } catch { /* toasted */ }
+          },
+        },
+        other,
+        back,
+      ].filter(Boolean),
+    });
+  } else {
+    showOverlay(`“${d.name}” đang chạy nhưng chưa bật ADB. Trong LDPlayer: Cài đặt → Cài đặt khác → Gỡ lỗi ADB → “Mở kết nối cục bộ”, lưu rồi khởi động lại máy ảo.`, {
+      actions: [isInstance(d) && { label: 'Khởi động lại', icon: 'restart', onClick: () => powerAction('reboot') }, other, back].filter(Boolean),
+    });
+  }
+}
+
+const sortDevices = (list) => [...list].sort((a, b) => (a.agent ?? '').localeCompare(b.agent ?? '') || (a.index ?? 0) - (b.index ?? 0));
+const isCurrent = (d) => !!current && (d === current || (d.id && d.id === current.id) || (isInstance(d) && d.machine === current.machine && d.index === current.index));
+
+function renderSwitcher() {
+  const q = $('switcher-search').value.trim().toLowerCase();
+  const list = sortDevices(devices).filter((d) => !q || `${d.name} ${d.agent}`.toLowerCase().includes(q));
+  const sig = JSON.stringify([q, list.map((d) => [d.id, d.name, d.running, d.adb, d.agent, d.index]), current?.id, current?.index, current?.machine]);
+  if (sig === lastSwitcherSig) return;
+  lastSwitcherSig = sig;
+  const live = devices.filter((d) => deviceState(d) === 'live').length;
+  $('switcher-count').textContent = `${live}/${devices.length} đang chạy`;
+  const nodes = [];
+  let group = null;
+  for (const d of list) {
+    if (d.agent !== group) {
+      group = d.agent;
+      nodes.push(el('div', { class: 'sw-group' }, group ?? 'PC'));
+    }
+    const s = deviceState(d);
+    nodes.push(
+      el(
+        'button',
+        { class: 'sw-item', type: 'button', 'aria-current': isCurrent(d) ? 'true' : undefined, title: STATE_LABEL[s], onclick: () => selectDevice(d) },
+        el('span', { class: `dot ${s}` }),
+        el('span', { class: 'nm' }, d.name),
+        d.index !== null && d.index !== undefined ? el('small', {}, `#${d.index}`) : null,
+      ),
+    );
+  }
+  $('switcher-list').replaceChildren(...(nodes.length ? nodes : [el('div', { class: 'sw-empty' }, devices.length ? 'Không có máy khớp.' : 'Chưa có máy nào.')]));
+}
+$('switcher-search').addEventListener('input', renderSwitcher);
+
+function openDeviceMenu(anchor) {
+  const items = [];
+  let group = null;
+  for (const d of sortDevices(devices)) {
+    if (d.agent !== group) {
+      group = d.agent;
+      items.push({ title: group ?? 'PC' });
+    }
+    const s = deviceState(d);
+    items.push({ label: d.name, icon: isCurrent(d) ? 'check' : 'blank', hint: s === 'live' ? `#${d.index ?? ''}` : STATE_LABEL[s], onClick: () => selectDevice(d) });
+  }
+  if (!items.length) items.push({ label: 'Chưa có máy nào', disabled: true });
+  items.push('-', { label: 'Về bảng điều khiển', icon: 'chevronLeft', onClick: () => (location.href = './') });
+  openMenu(anchor, items, { sheetTitle: 'Chọn máy' });
+}
+$('dev-switch').addEventListener('click', (e) => openDeviceMenu(e.currentTarget));
 
 async function isLoggedIn() {
   try {
     const res = await fetch('/api/session');
     if (res.status === 401) {
-      requireLogin('Phiên đăng nhập đã hết hạn.');
+      goLogin();
       return false;
     }
   } catch {
@@ -1066,58 +1353,55 @@ async function refreshDevices() {
   let body;
   try {
     const res = await fetch('/api/devices');
-    if (res.status === 401) return requireLogin();
+    if (res.status === 401) return goLogin();
     body = await res.json();
   } catch {
-    showOverlay('Không kết nối được server.');
+    if (!deviceId) showOverlay('Không kết nối được server, đang thử lại…');
     devicesTimer = setTimeout(refreshDevices, 3000);
     return;
   }
-  logoutBtn.hidden = false;
-  $('btn-account').hidden = false;
 
-  const { devices, agents } = body;
-  const multiAgent = (agents?.length ?? 0) > 1;
-  const signature = JSON.stringify(devices);
-  if (signature !== lastDevicesSignature) {
-    // Re-rendering closes an open dropdown, so only do it when something changed.
-    lastDevicesSignature = signature;
-    deviceSelect.replaceChildren(
-      ...devices.map((d) => {
-        const opt = new Option(deviceLabel(d, multiAgent), d.id ?? '');
-        opt.disabled = !d.adb;
-        return opt;
-      }),
-    );
-  }
-
+  devices = body.devices ?? [];
+  const agents = body.agents ?? [];
   const ready = devices.filter((d) => d.adb);
+  const wanted = findWanted();
+  const requested = urlParams().has('device') || urlParams().has('m');
   if (deviceId && ready.some((d) => d.id === deviceId)) {
-    deviceSelect.value = deviceId;
-  } else if (ready.length) {
-    const wanted = params.get('device') ?? storageGet('ldr-device');
-    const pick = ready.find((d) => d.id === wanted) ?? ready[0];
-    deviceSelect.value = pick.id;
-    connect(pick.id);
+    current = ready.find((d) => d.id === deviceId);
+  } else if (wanted && deviceState(wanted) === 'live') {
+    current = wanted;
+    launchingAt = 0;
+    connect(wanted.id);
+  } else if (wanted) {
+    current = wanted;
+    connect(null);
+    showDeviceState(wanted);
+  } else if (!requested && ready.length) {
+    const stored = storageGet('ldr-device');
+    selectDevice(ready.find((d) => d.id === stored) ?? ready[0]);
   } else {
     connect(null);
+    current = null;
     setStatus('idle', 'Chưa có máy ảo');
     let message = 'Không tìm thấy máy ảo LDPlayer / thiết bị adb nào.';
-    if (agents && agents.length === 0) {
-      message = 'Chưa có PC nào online. Vào Tài khoản (biểu tượng người ở góc trên) để tạo API key rồi nhập vào app trên PC.';
+    if (agents.length === 0) {
+      message = 'Chưa có PC nào online. Mở app LDPlayer Remote trên PC, hoặc vào bảng điều khiển → API key để kết nối PC mới.';
+    } else if (requested && devices.length) {
+      message = 'Không tìm thấy máy đã chọn. Có thể máy đã bị xoá hoặc chuyển sang PC khác.';
+    } else if (devices.length) {
+      message = 'Chưa có máy ảo nào bật ADB. Trong LDPlayer: Cài đặt → Cài đặt khác → Gỡ lỗi ADB → “Mở kết nối cục bộ”, lưu rồi khởi động lại máy ảo.';
     }
-    else if (devices.length) {
-      message = 'Chưa có máy ảo nào bật ADB. Trong LDPlayer: Cài đặt → Cài đặt khác → Gỡ lỗi ADB → "Mở kết nối cục bộ", lưu rồi khởi động lại máy ảo.';
-    }
-    showOverlay(message);
+    showOverlay(message, {
+      actions: [
+        devices.length && { label: 'Chọn máy khác', icon: 'layers', primary: true, onClick: (e) => openDeviceMenu(e.currentTarget) },
+        { label: 'Về bảng điều khiển', href: './' },
+      ].filter(Boolean),
+    });
   }
-  devicesTimer = setTimeout(refreshDevices, ready.length ? 15000 : 3000);
+  renderHeader();
+  renderSwitcher();
+  devicesTimer = setTimeout(refreshDevices, deviceId ? 15000 : 3000);
 }
-
-deviceSelect.addEventListener('change', () => {
-  storageSet('ldr-device', deviceSelect.value);
-  connect(deviceSelect.value || null);
-});
 
 async function init() {
   if (!('VideoDecoder' in window)) {
@@ -1126,9 +1410,12 @@ async function init() {
       window.isSecureContext
         ? 'Trình duyệt này không hỗ trợ WebCodecs. Hãy dùng Chrome, Edge, Safari 16.4+ hoặc Firefox 130+.'
         : 'WebCodecs chỉ chạy trên https hoặc localhost. Hãy mở trang bằng https://…',
+      { actions: [{ label: 'Về bảng điều khiển', href: './' }] },
     );
     return;
   }
+  // Go to the login page right away instead of waiting for a refused WebSocket handshake.
+  if (!(await isLoggedIn())) return;
   refreshDevices();
 }
 

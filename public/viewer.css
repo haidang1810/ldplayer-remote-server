@@ -1,0 +1,327 @@
+/* Viewer: header, phone list, framed stream, toolbar (desktop) / bottom controls (mobile). */
+
+html, body { height: 100%; overflow: hidden; }
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  /* phone browsers: no pull-to-refresh, tap flash or long-press callout while controlling */
+  overscroll-behavior: none;
+  -webkit-touch-callout: none;
+}
+.spacer { flex: 1; }
+
+/* ---------------------------------------------------------------- header */
+
+.vbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  min-height: 56px;
+  z-index: 5;
+}
+.dev-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 340px;
+  padding: 5px 10px 5px 5px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.dev-switch:hover { border-color: var(--border-strong); }
+.dev-ico { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); flex: none; }
+.dev-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.dev-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-text small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-text small:empty { display: none; }
+
+.vstatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.vstatus::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.vstatus[data-state="live"] { background: var(--ok-soft); color: var(--ok-text); }
+.vstatus[data-state="starting"] { background: var(--warn-soft); color: var(--warn-text); }
+.vstatus[data-state="error"] { background: var(--danger-soft); color: var(--danger-text); }
+
+.stats {
+  color: var(--muted);
+  font: 12px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  display: none;
+}
+body.show-stats .stats { display: block; }
+
+/* ---------------------------------------------------------------- body */
+
+.vbody { flex: 1; min-height: 0; display: flex; }
+
+.switcher {
+  width: 260px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+body.panel-off .switcher { display: none; }
+.switcher-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px; }
+.switcher-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -4px; padding: 0 4px; }
+.sw-group { font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); padding: 10px 6px 4px; }
+.sw-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sw-item:hover { background: var(--surface-2); }
+.sw-item[aria-current="true"] { background: var(--accent-soft); color: var(--accent-text); }
+.sw-item .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.sw-item .dot.live { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.sw-item .dot.noadb { background: var(--warn); }
+.sw-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sw-item small { color: var(--faint); }
+.sw-empty { color: var(--muted); padding: 12px 6px; font-size: 13px; }
+
+#stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 26px;
+  background:
+    radial-gradient(800px 500px at 50% 0%, rgba(99, 102, 241, 0.10), transparent 70%),
+    #07090e;
+}
+
+/* Sized by layout() to the video's aspect ratio; receives all pointer input. The canvas (WebSocket
+   path, WebCodecs) and the video element (WebRTC path) fill it, one at a time. The phone bezel is a
+   box-shadow so it never changes the measured size. */
+#surface {
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 0 0 9px #141925, 0 0 0 10px rgba(255, 255, 255, 0.09), 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+#surface > canvas, #surface > video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  object-fit: fill;
+  background: #000;
+}
+#surface > [hidden] { display: none; }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(4, 6, 10, 0.55);
+  z-index: 2;
+}
+.overlay[hidden] { display: none; }
+.overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 420px;
+  padding: 22px 24px;
+  border-radius: 18px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+}
+.overlay-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.overlay-actions:empty { display: none; }
+
+/* Off-screen input that receives keyboard/IME text; kept focusable so phones show a keyboard. */
+.ime {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  resize: none;
+  font-size: 16px; /* prevents iOS zoom on focus */
+}
+
+/* ---------------------------------------------------------------- desktop toolbar */
+
+.vtools {
+  flex: none;
+  width: 68px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.vtools::-webkit-scrollbar { display: none; }
+.tool {
+  width: 44px;
+  height: 40px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+.tool:hover { background: var(--surface-2); color: var(--text); }
+.tool:active { background: var(--surface-3); }
+.tool svg.i { width: 20px; height: 20px; }
+.tool.text { font-size: 10.5px; font-weight: 700; line-height: 1.1; padding: 0 2px; height: 36px; border-color: var(--border); }
+.tool[aria-pressed="true"] { color: var(--accent-text); border-color: var(--accent); background: var(--accent-soft); }
+.tool-sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; flex: none; }
+
+/* ---------------------------------------------------------------- mobile controls */
+
+.vnav { display: none; }
+
+.desk { display: inline-flex; }
+
+@media (max-width: 1100px) {
+  .switcher { display: none; }
+  #btn-panel { display: none; }
+}
+
+@media (max-width: 760px) {
+  .vbar { gap: 6px; min-height: 52px; padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .dev-switch { flex: 1; max-width: none; padding: 4px 8px 4px 4px; }
+  .dev-ico { width: 28px; height: 28px; }
+  .vbar .spacer, .stats, .desk { display: none !important; }
+  .vstatus { font-size: 0; padding: 0 8px; gap: 0; }
+  .vstatus::before { width: 9px; height: 9px; }
+  .vtools { display: none; }
+  #stage { padding: 6px; background: #000; }
+  #surface { border-radius: 4px; box-shadow: none; }
+  .vnav {
+    display: flex;
+    justify-content: space-around;
+    gap: 4px;
+    padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+  .vnav button {
+    flex: 1;
+    max-width: 76px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    color: var(--text);
+  }
+  .vnav button:active { background: var(--surface-3); }
+  .vnav svg.i { width: 22px; height: 22px; }
+}
+
+/* ---------------------------------------------------------------- full screen */
+
+/* Full-screen mode without the Fullscreen API (iPhone): hide the bars, let the stage fill the
+   screen (clear of the notch / home indicator), and float a small exit + back control. */
+.float-bar { display: none; }
+
+body.immersive .vbar,
+body.immersive .vnav,
+body.immersive .vtools,
+body.immersive .switcher { display: none; }
+
+body.immersive #stage {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: #000;
+}
+body.immersive #surface, :fullscreen #surface { border-radius: 0; box-shadow: none; }
+:fullscreen #stage { padding: 0; background: #000; }
+
+body.immersive .float-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: fixed;
+  right: calc(8px + env(safe-area-inset-right));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  opacity: 0.45;
+}
+body.immersive .float-bar:hover,
+body.immersive .float-bar:active { opacity: 1; }
+.float-bar button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(18, 23, 34, 0.85);
+  color: #e8ecf5;
+}
+
+/* clipboard dialog */
+.clip-text { min-height: 120px; resize: vertical; font: var(--mono); }
+.clip-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.clip-actions .btn { flex: 1 1 160px; }

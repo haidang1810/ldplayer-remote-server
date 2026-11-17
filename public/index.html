@@ -2,10 +2,10 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#0f1115">
-  <title>LDPlayer Remote</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6' y='2' width='12' height='20' rx='2.5' fill='%2334d399'/%3E%3C/svg%3E">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e15">
+  <title>LD Remote · Điện thoại đám mây</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='6' y='2' width='12' height='20' rx='2.5' fill='%236366f1'/%3E%3C/svg%3E">
   <!-- Home-screen app: runs without browser chrome (iOS ignores the Fullscreen API on iPhone). -->
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon-180.png">
@@ -13,64 +13,275 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="LD Remote">
-  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
-  <header class="bar">
-    <select id="device" aria-label="Chọn máy ảo"></select>
-    <span id="status" class="status" data-state="idle">Chưa kết nối</span>
-    <span class="spacer"></span>
-    <span id="stats" class="stats"></span>
-    <button id="btn-fullscreen" class="icon-btn" title="Toàn màn hình" aria-label="Toàn màn hình">
-      <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-    </button>
-    <a id="btn-account" class="icon-btn" href="account.html" title="Tài khoản, máy, API key" aria-label="Tài khoản" hidden>
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-    </a>
-    <button id="btn-logout" class="icon-btn" title="Đăng xuất" aria-label="Đăng xuất" hidden>
-      <svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/></svg>
-    </button>
-  </header>
+  <div id="boot" class="boot"><div class="spinner"></div></div>
 
-  <main id="stage">
-    <div id="surface">
-      <canvas id="screen"></canvas>
-      <video id="video" muted autoplay playsinline disablepictureinpicture hidden></video>
+  <!-- ============================================================ login / register -->
+  <div id="auth" class="auth" hidden>
+    <div class="auth-hero" aria-hidden="true">
+      <div class="brand"><span class="logo"><i data-icon="phone"></i></span><span>LD Remote</span></div>
+      <div class="hero-copy">
+        <h1>Điện thoại Android đám mây, điều khiển từ mọi nơi</h1>
+        <p>Quản lý toàn bộ máy ảo LDPlayer trên các PC của bạn trong một bảng điều khiển: bật/tắt, cài ứng dụng và thao tác trực tiếp ngay trên trình duyệt.</p>
+        <ul>
+          <li><i data-icon="signal"></i> Hình ảnh độ trễ thấp qua WebRTC</li>
+          <li><i data-icon="layers"></i> Nhiều PC, nhiều máy ảo trong một tài khoản</li>
+          <li><i data-icon="shield"></i> Tài khoản được quản trị viên duyệt</li>
+        </ul>
+      </div>
+      <div class="hero-phones">
+        <div class="mock m1"><div></div></div>
+        <div class="mock m2"><div></div></div>
+        <div class="mock m3"><div></div></div>
+      </div>
     </div>
-    <div id="overlay" class="overlay">
-      <div id="overlay-text">Đang tải…</div>
-      <form id="login-form" class="login-form" hidden>
-        <input id="username-input" type="text" placeholder="Tên đăng nhập" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
-        <input id="password-input" type="password" placeholder="Mật khẩu" autocomplete="current-password" required>
-        <input id="password2-input" type="password" placeholder="Nhập lại mật khẩu" autocomplete="new-password" hidden>
-        <button id="login-submit" type="submit">Đăng nhập</button>
-        <button id="login-switch" type="button" class="link-btn">Chưa có tài khoản? Đăng ký</button>
-      </form>
+
+    <div class="auth-side">
+      <div class="auth-card">
+        <div class="brand brand-sm"><span class="logo"><i data-icon="phone"></i></span><span>LD Remote</span></div>
+
+        <div id="auth-forms">
+          <div class="seg auth-tabs" role="tablist" id="auth-tabs">
+            <button type="button" role="tab" id="tab-login" aria-selected="true">Đăng nhập</button>
+            <button type="button" role="tab" id="tab-register" aria-selected="false">Đăng ký</button>
+          </div>
+          <h2 id="auth-title">Chào mừng trở lại</h2>
+          <p id="auth-sub" class="muted">Đăng nhập để vào bảng điều khiển.</p>
+          <form id="auth-form" class="auth-form" novalidate>
+            <label class="field"><span>Tên đăng nhập</span>
+              <input id="auth-user" class="input" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+            </label>
+            <label class="field"><span>Mật khẩu</span>
+              <input id="auth-pass" class="input" type="password" autocomplete="current-password" required>
+            </label>
+            <label class="field" id="auth-pass2-field" hidden><span>Nhập lại mật khẩu</span>
+              <input id="auth-pass2" class="input" type="password" autocomplete="new-password">
+            </label>
+            <div id="auth-note" class="note" hidden><i data-icon="info"></i><span>Tài khoản mới cần <b>quản trị viên duyệt</b> trước khi đăng nhập được. Mật khẩu tối thiểu 8 ký tự.</span></div>
+            <div id="auth-error" class="form-error" role="alert" hidden></div>
+            <button id="auth-submit" class="btn primary lg block" type="submit">Đăng nhập</button>
+          </form>
+        </div>
+
+        <div id="auth-pending" class="pending-panel" hidden>
+          <div class="pending-icon"><i data-icon="clock"></i></div>
+          <h2>Đang chờ duyệt</h2>
+          <p class="muted" id="pending-text">Tài khoản của bạn đã được tạo và đang chờ quản trị viên duyệt. Khi được duyệt, bạn đăng nhập lại bằng tên và mật khẩu vừa tạo.</p>
+          <ol class="steps compact">
+            <li class="done"><b>Đăng ký</b><span>Đã gửi yêu cầu</span></li>
+            <li class="current"><b>Quản trị viên duyệt</b><span>Thường trong ngày, hãy báo cho người quản lý server</span></li>
+            <li><b>Đăng nhập và kết nối PC</b><span>Tạo API key rồi dán vào app trên PC</span></li>
+          </ol>
+          <button id="pending-back" class="btn block" type="button">Quay lại đăng nhập</button>
+        </div>
+      </div>
+      <p class="auth-foot muted">Mẹo: trên iPhone, bấm Chia sẻ → “Thêm vào MH chính” để dùng như ứng dụng toàn màn hình.</p>
     </div>
-    <textarea id="ime" class="ime" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Bàn phím"></textarea>
-  </main>
-
-  <nav class="nav" id="nav">
-    <button data-key="25" title="Giảm âm lượng" aria-label="Giảm âm lượng"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4"/></svg></button>
-    <button data-key="24" title="Tăng âm lượng" aria-label="Tăng âm lượng"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 12h4M19 10v4"/></svg></button>
-    <span class="nav-sep"></span>
-    <button data-key="4" title="Quay lại" aria-label="Quay lại" class="main"><svg viewBox="0 0 24 24"><path d="M16 5 7 12l9 7z"/></svg></button>
-    <button data-key="3" title="Màn hình chính" aria-label="Màn hình chính" class="main"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></svg></button>
-    <button data-key="187" title="Ứng dụng gần đây" aria-label="Ứng dụng gần đây" class="main"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
-    <span class="nav-sep"></span>
-    <button id="btn-keyboard" title="Bàn phím (điện thoại)" aria-label="Bàn phím"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg></button>
-    <button id="btn-keymode" class="text-btn" title="Chế độ bàn phím: Văn bản gửi ký tự, Phím gửi mã phím thô (cho game)">Văn bản</button>
-    <button id="btn-notify" title="Thanh thông báo" aria-label="Thanh thông báo"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></button>
-  </nav>
-
-  <!-- Shown only in full-screen mode, where the top and bottom bars are hidden. -->
-  <div id="float-bar" class="float-bar">
-    <button id="float-back" title="Quay lại" aria-label="Quay lại"><svg viewBox="0 0 24 24"><path d="M16 5 7 12l9 7z"/></svg></button>
-    <button id="float-exit" title="Thoát toàn màn hình" aria-label="Thoát toàn màn hình"><svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
   </div>
 
-  <div id="toast" class="toast" hidden></div>
+  <!-- ============================================================ app shell -->
+  <div id="shell" class="shell" hidden>
+    <aside class="sidebar" aria-label="Điều hướng chính">
+      <div class="brand"><span class="logo"><i data-icon="phone"></i></span><span>LD Remote</span></div>
+      <nav class="side-nav">
+        <a href="#phones" data-route="phones"><i data-icon="phone"></i><span>Điện thoại</span><span class="nav-count" id="nav-phones-count"></span></a>
+        <a href="#pcs" data-route="pcs"><i data-icon="pc"></i><span>Máy tính (PC)</span></a>
+        <a href="#keys" data-route="keys"><i data-icon="key"></i><span>API key</span></a>
+        <a href="#account" data-route="account"><i data-icon="user"></i><span>Tài khoản</span></a>
+        <a href="#admin" data-route="admin" class="admin-only" hidden><i data-icon="shield"></i><span>Quản trị</span><span class="count-badge" id="nav-pending" hidden></span></a>
+      </nav>
+      <div class="side-foot">
+        <div class="side-status" id="side-status"></div>
+        <div class="me">
+          <span class="avatar" id="me-avatar">?</span>
+          <div class="me-text"><b id="me-name"></b><small id="me-role"></small></div>
+          <button class="btn ghost icon sm theme-toggle" type="button" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối"><i data-icon="moon"></i></button>
+          <button class="btn ghost icon sm logout-btn" type="button" title="Đăng xuất" aria-label="Đăng xuất"><i data-icon="logout"></i></button>
+        </div>
+      </div>
+    </aside>
 
-  <script type="module" src="app.js"></script>
+    <header class="mtop">
+      <div class="brand brand-sm"><span class="logo"><i data-icon="phone"></i></span><span id="mtop-title">Điện thoại</span></div>
+      <button class="btn ghost icon theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối"><i data-icon="moon"></i></button>
+      <a class="avatar" id="mtop-avatar" href="#account" aria-label="Tài khoản">?</a>
+    </header>
+
+    <main class="main" id="main" tabindex="-1">
+      <!-- ---------------------------------------------------- phones -->
+      <section class="view" data-view="phones" aria-labelledby="h-phones">
+        <div class="page-head">
+          <div>
+            <h1 id="h-phones">Điện thoại</h1>
+            <p class="muted">Máy ảo LDPlayer trên các PC của bạn. Bấm vào một máy để điều khiển.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn icon" id="btn-refresh" type="button" title="Làm mới" aria-label="Làm mới"><i data-icon="refresh"></i></button>
+            <button class="btn" id="btn-select" type="button" aria-pressed="false"><i data-icon="select"></i><span>Chọn nhiều</span></button>
+            <button class="btn primary" id="btn-create" type="button"><i data-icon="plus"></i><span>Tạo máy mới</span></button>
+          </div>
+        </div>
+
+        <div class="kpis" id="kpis">
+          <div class="kpi"><span class="kpi-ico"><i data-icon="phone"></i></span><div><b id="kpi-total">–</b><small>Tổng số máy</small></div></div>
+          <div class="kpi ok"><span class="kpi-ico"><i data-icon="play"></i></span><div><b id="kpi-running">–</b><small>Đang chạy</small></div></div>
+          <div class="kpi"><span class="kpi-ico"><i data-icon="power"></i></span><div><b id="kpi-off">–</b><small>Đã tắt</small></div></div>
+          <div class="kpi accent"><span class="kpi-ico"><i data-icon="pc"></i></span><div><b id="kpi-pcs">–</b><small>PC online</small></div></div>
+        </div>
+
+        <div class="filters" id="filters">
+          <label class="input-icon search"><i data-icon="search"></i>
+            <input id="f-search" class="input" type="search" placeholder="Tìm theo tên máy…" aria-label="Tìm theo tên máy">
+          </label>
+          <select id="f-pc" class="input" aria-label="Lọc theo PC"><option value="">Tất cả PC</option></select>
+          <div class="seg" role="radiogroup" aria-label="Lọc theo trạng thái" id="f-state">
+            <button type="button" role="radio" data-state="" aria-checked="true">Tất cả <span></span></button>
+            <button type="button" role="radio" data-state="running" aria-checked="false">Đang chạy <span></span></button>
+            <button type="button" role="radio" data-state="off" aria-checked="false">Đã tắt <span></span></button>
+          </div>
+        </div>
+
+        <div id="phones-empty" class="empty-wrap" hidden></div>
+        <div id="grid" class="grid" aria-live="polite"></div>
+      </section>
+
+      <!-- ---------------------------------------------------- PCs -->
+      <section class="view" data-view="pcs" aria-labelledby="h-pcs" hidden>
+        <div class="page-head">
+          <div>
+            <h1 id="h-pcs">Máy tính (PC)</h1>
+            <p class="muted">Các PC chạy LDPlayer đã kết nối bằng API key của bạn. Nhiều PC dùng chung một key vẫn hiện riêng từng máy.</p>
+          </div>
+          <div class="head-actions">
+            <a class="btn primary" href="#keys"><i data-icon="plus"></i><span>Kết nối PC mới</span></a>
+          </div>
+        </div>
+        <div id="pcs" class="pc-grid"></div>
+      </section>
+
+      <!-- ---------------------------------------------------- API keys -->
+      <section class="view" data-view="keys" aria-labelledby="h-keys" hidden>
+        <div class="page-head">
+          <div>
+            <h1 id="h-keys">API key</h1>
+            <p class="muted">Key dùng để app trên PC kết nối vào tài khoản này. Xoá key thì mọi PC đang dùng key đó bị ngắt ngay.</p>
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <h2 class="card-title"><i data-icon="sparkle"></i>Kết nối PC trong 3 bước</h2>
+            <ol class="steps">
+              <li><b>Tạo API key</b><span>Đặt tên dễ nhớ, ví dụ “Máy nhà” hoặc “PC văn phòng”.</span>
+                <form id="key-form" class="inline-form">
+                  <input id="key-name" class="input" type="text" placeholder="Tên key (vd: Máy nhà)" maxlength="60" aria-label="Tên key">
+                  <button type="submit" class="btn primary"><i data-icon="plus"></i>Tạo key</button>
+                </form>
+                <div id="new-key" class="new-key" hidden>
+                  <div class="new-key-head"><i data-icon="key"></i><b>Key mới</b><span class="chip warn plain">Chỉ hiện một lần</span></div>
+                  <div class="key-box"><code id="new-key-value"></code><button id="new-key-copy" type="button" class="btn sm primary"><i data-icon="copy"></i>Chép</button></div>
+                  <details>
+                    <summary>Dùng agent Node? Ghi vào <code>agent.env</code></summary>
+                    <div class="key-box"><pre id="new-key-env"></pre><button id="new-env-copy" type="button" class="btn sm"><i data-icon="copy"></i>Chép</button></div>
+                  </details>
+                </div>
+              </li>
+              <li><b>Cài app LDPlayer Remote trên PC</b><span>Trên PC đang chạy LDPlayer, mở app (agent) của LDPlayer Remote. Bật ADB trong LDPlayer: Cài đặt → Cài đặt khác → Gỡ lỗi ADB → “Mở kết nối cục bộ”.</span></li>
+              <li><b>Dán key vào app</b><span>Dán key và địa chỉ server <code id="relay-url"></code>. PC sẽ hiện ở mục <a href="#pcs">Máy tính</a>, các máy ảo hiện ở mục <a href="#phones">Điện thoại</a>.</span></li>
+            </ol>
+          </div>
+          <div class="card">
+            <h2 class="card-title"><i data-icon="key"></i>Key của bạn</h2>
+            <div id="keys" class="list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------- account -->
+      <section class="view" data-view="account" aria-labelledby="h-account" hidden>
+        <div class="page-head">
+          <div>
+            <h1 id="h-account">Tài khoản</h1>
+            <p class="muted">Thông tin đăng nhập và cài đặt giao diện.</p>
+          </div>
+        </div>
+        <div class="two-col">
+          <div class="stack-col">
+            <div class="card profile">
+              <span class="avatar xl" id="acc-avatar">?</span>
+              <div><h2 id="acc-name"></h2><div id="acc-role"></div></div>
+              <button class="btn danger logout-btn" type="button"><i data-icon="logout"></i>Đăng xuất</button>
+            </div>
+            <div class="card">
+              <h2 class="card-title"><i data-icon="settings"></i>Giao diện</h2>
+              <div class="setting-row">
+                <div><b>Chế độ tối</b><small class="muted">Giao diện tối dễ nhìn hơn khi điều khiển lâu.</small></div>
+                <button class="switch theme-switch" type="button" role="switch" aria-checked="true" aria-label="Chế độ tối"><span></span></button>
+              </div>
+              <div class="setting-row">
+                <div><b>Dùng như ứng dụng</b><small class="muted">iPhone: Safari → Chia sẻ → “Thêm vào MH chính”. Android: menu Chrome → “Cài đặt ứng dụng”.</small></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h2 class="card-title"><i data-icon="key"></i>Đổi mật khẩu</h2>
+            <form id="password-form" class="form-stack">
+              <input type="text" autocomplete="username" id="pw-username" hidden>
+              <label class="field"><span>Mật khẩu hiện tại</span><input id="pw-current" class="input" type="password" autocomplete="current-password" required></label>
+              <label class="field"><span>Mật khẩu mới</span><input id="pw-new" class="input" type="password" autocomplete="new-password" minlength="8" required><small class="hint">Tối thiểu 8 ký tự.</small></label>
+              <label class="field"><span>Nhập lại mật khẩu mới</span><input id="pw-new2" class="input" type="password" autocomplete="new-password" required></label>
+              <button type="submit" class="btn primary">Đổi mật khẩu</button>
+              <small class="muted">Sau khi đổi, các trình duyệt khác sẽ bị đăng xuất.</small>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------- admin -->
+      <section class="view" data-view="admin" aria-labelledby="h-admin" hidden>
+        <div class="page-head">
+          <div>
+            <h1 id="h-admin">Quản trị người dùng</h1>
+            <p class="muted" id="register-note"></p>
+          </div>
+        </div>
+        <div class="filters">
+          <label class="input-icon search"><i data-icon="search"></i>
+            <input id="u-search" class="input" type="search" placeholder="Tìm người dùng…" aria-label="Tìm người dùng">
+          </label>
+          <div class="seg" role="radiogroup" aria-label="Lọc người dùng" id="u-filter">
+            <button type="button" role="radio" data-status="pending" aria-checked="false">Chờ duyệt <span></span></button>
+            <button type="button" role="radio" data-status="active" aria-checked="false">Đang dùng <span></span></button>
+            <button type="button" role="radio" data-status="disabled" aria-checked="false">Đã khoá <span></span></button>
+            <button type="button" role="radio" data-status="" aria-checked="true">Tất cả <span></span></button>
+          </div>
+        </div>
+        <div id="users" class="list users"></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="Điều hướng">
+      <a href="#phones" data-route="phones"><i data-icon="phone"></i><span>Điện thoại</span></a>
+      <a href="#pcs" data-route="pcs"><i data-icon="pc"></i><span>PC</span></a>
+      <a href="#keys" data-route="keys"><i data-icon="key"></i><span>API key</span></a>
+      <a href="#account" data-route="account"><i data-icon="user"></i><span>Tài khoản</span></a>
+      <a href="#admin" data-route="admin" class="admin-only" hidden><i data-icon="shield"></i><span>Quản trị</span><span class="count-badge" id="tab-pending" hidden></span></a>
+    </nav>
+
+    <div id="batchbar" class="batchbar" hidden>
+      <b id="batch-count">0 máy</b>
+      <button class="btn sm" type="button" id="batch-all">Chọn tất cả</button>
+      <span class="spacer"></span>
+      <button class="btn sm" type="button" id="batch-launch"><i data-icon="play"></i><span>Bật</span></button>
+      <button class="btn sm" type="button" id="batch-quit"><i data-icon="power"></i><span>Tắt</span></button>
+      <button class="btn sm" type="button" id="batch-reboot"><i data-icon="restart"></i><span>Khởi động lại</span></button>
+      <button class="btn sm ghost icon" type="button" id="batch-close" aria-label="Thoát chọn nhiều"><i data-icon="x"></i></button>
+    </div>
+  </div>
+
+  <script type="module" src="dashboard.js"></script>
 </body>
 </html>
