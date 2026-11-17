@@ -34,8 +34,12 @@ if (store.countUsers() === 0 && config.legacyPasswordHash) {
   store.createUser({ username: 'admin', passwordHash: config.legacyPasswordHash, role: 'admin', status: 'active' });
   console.log('created account "admin" from the old PASSWORD_HASH (log in with the old password)');
 }
-if (store.countUsers() === 0) {
-  console.log('no accounts yet: the first account registered on the web page becomes the admin');
+if (!store.firstAdmin()) {
+  console.warn('no active admin yet: create one with `ldplayer-relay-admin admin <name>` (or `npm run admin -- admin <name>`)');
+}
+if (config.legacyAgentKey) {
+  console.warn('AGENT_KEY in relay.env still lets agents in as the first admin and cannot be revoked from the web page; ' +
+    'remove it once your PCs use API keys');
 }
 
 const auth = new Auth({ store, trustProxy: config.trustProxy, allowRegister: config.allowRegister });
@@ -48,7 +52,7 @@ const TURN_CREDENTIAL_TTL_S = 12 * 3600;
  * agent's node-datachannel). TURN uses coturn's REST-style credentials: username = expiry:label,
  * password = base64(HMAC-SHA1(secret, username)).
  */
-function iceServers() {
+function iceServers(userId) {
   if (!config.turnSecret || !config.turnHost) {
     return {
       agent: ['stun:stun.l.google.com:19302'],
@@ -56,7 +60,7 @@ function iceServers() {
     };
   }
   const { turnHost: host, turnPort: port } = config;
-  const username = `${Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL_S}:ldplayer`;
+  const username = `${Math.floor(Date.now() / 1000) + TURN_CREDENTIAL_TTL_S}:u${userId}`;
   const password = createHmac('sha1', config.turnSecret).update(username).digest('base64');
   return {
     agent: [`stun:${host}:${port}`, { hostname: host, port, username, password, relayType: 'TurnUdp' }],
@@ -318,7 +322,7 @@ async function handleRequest(req, res) {
     // The session cookie is SameSite=Strict; also refuse state changes announced from another site.
     if (req.method !== 'GET' && req.headers.origin && !auth.isSameOrigin(req)) return sendJson(res, 403, { error: 'bad origin' });
     if (pathname === '/api/config') {
-      return sendJson(res, 200, { allowRegister: config.allowRegister, hasUsers: store.countUsers() > 0 });
+      return sendJson(res, 200, { allowRegister: config.allowRegister });
     }
     if (pathname === '/api/login' && req.method === 'POST') return auth.handleLogin(req, res);
     if (pathname === '/api/register' && req.method === 'POST') return auth.handleRegister(req, res);
@@ -434,7 +438,7 @@ server.on('upgrade', (req, socket, head) => {
       viewer.on('close', () => {
         if (channels.delete(id)) clearTimeout(timer);
       });
-      agent.send({ type: 'open', channel: id, serial, ice: iceServers() });
+      agent.send({ type: 'open', channel: id, serial, ice: iceServers(user.id) });
     });
   }
 

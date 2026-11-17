@@ -92,9 +92,7 @@ fetch('/api/config')
   .then((r) => r.json())
   .then((c) => {
     allowRegister = c.allowRegister !== false;
-    // Fresh server: the first account becomes the admin, so open straight on the sign-up form.
-    setRegisterMode(c.hasUsers === false);
-    if (c.hasUsers === false && !loginForm.hidden) overlayText.textContent = 'Tạo tài khoản admin đầu tiên.';
+    setRegisterMode(false);
   })
   .catch(() => {});
 

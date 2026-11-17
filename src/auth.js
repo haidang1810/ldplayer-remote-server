@@ -9,10 +9,10 @@ const COOKIE_NAME = 'ldr_sid';
 export const SESSION_MS = 30 * 24 * 3600 * 1000;
 const SCRYPT_PARAMS = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
-const IP_MAX_FAILURES = 8;
+// Per client IP only: a server-wide limit would let anyone lock every user out with a few bad
+// logins. nginx overwrites X-Forwarded-For with the real address, so the IP can't be spoofed.
+const IP_MAX_ATTEMPTS = 8;
 const IP_WINDOW_MS = 15 * 60 * 1000;
-const GLOBAL_MAX_FAILURES = 60;
-const GLOBAL_WINDOW_MS = 60 * 60 * 1000;
 const REGISTER_MAX_PER_IP = 5;
 const REGISTER_WINDOW_MS = 60 * 60 * 1000;
 
@@ -138,8 +138,7 @@ export class Auth {
     this.store = store;
     this.trustProxy = trustProxy;
     this.allowRegister = allowRegister;
-    this.ipFailures = new WindowCounter(IP_MAX_FAILURES, IP_WINDOW_MS);
-    this.globalFailures = new WindowCounter(GLOBAL_MAX_FAILURES, GLOBAL_WINDOW_MS);
+    this.ipAttempts = new WindowCounter(IP_MAX_ATTEMPTS, IP_WINDOW_MS);
     this.registrations = new WindowCounter(REGISTER_MAX_PER_IP, REGISTER_WINDOW_MS);
   }
 
@@ -187,9 +186,12 @@ export class Auth {
 
   async handleLogin(req, res) {
     const ip = this.clientIp(req);
-    if (this.ipFailures.full(ip) || this.globalFailures.full('*')) {
+    if (this.ipAttempts.full(ip)) {
       return sendJson(res, 429, { error: 'Sai mật khẩu quá nhiều lần, thử lại sau 15 phút.' });
     }
+    // Counted before the (slow) password hash, so parallel requests can't slip past the limit;
+    // a successful login clears it again.
+    this.ipAttempts.hit(ip);
     let body;
     try {
       body = await readJsonBody(req);
@@ -201,13 +203,11 @@ export class Auth {
     const user = username ? this.store.userByName(username) : undefined;
     const ok = (await verifyPasswordHash(password, user?.password_hash ?? DUMMY_HASH)) && Boolean(user);
     if (!ok) {
-      this.ipFailures.hit(ip);
-      this.globalFailures.hit('*');
       console.warn(`login failed for "${username.slice(0, 40)}" from ${ip}`);
       await sleep(400);
       return sendJson(res, 401, { error: 'Sai tên đăng nhập hoặc mật khẩu.' });
     }
-    this.ipFailures.clear(ip);
+    this.ipAttempts.clear(ip);
     if (user.status === 'pending') return sendJson(res, 403, { error: 'Tài khoản đang chờ admin duyệt.' });
     if (user.status !== 'active') return sendJson(res, 403, { error: 'Tài khoản đã bị khoá.' });
     console.log(`login "${user.username}" from ${ip}`);
@@ -217,7 +217,6 @@ export class Auth {
   async handleRegister(req, res) {
     if (!this.allowRegister) return sendJson(res, 403, { error: 'Server đang tắt đăng ký.' });
     const ip = this.clientIp(req);
-    if (this.registrations.full(ip)) return sendJson(res, 429, { error: 'Đăng ký quá nhiều lần, thử lại sau.' });
     let body;
     try {
       body = await readJsonBody(req);
@@ -227,18 +226,17 @@ export class Auth {
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const error = validateCredentials(username, body.password);
     if (error) return sendJson(res, 400, { error });
-    if (this.store.userByName(username)) return sendJson(res, 409, { error: 'Tên đăng nhập đã có người dùng.' });
+    // Check and count in one synchronous step, before the slow hash, so parallel requests can't
+    // get past the limit.
+    if (this.registrations.full(ip)) return sendJson(res, 429, { error: 'Đăng ký quá nhiều lần, thử lại sau.' });
     this.registrations.hit(ip);
-    // The very first account (empty database) becomes the admin and is active right away.
-    const first = this.store.countUsers() === 0;
-    const user = this.store.createUser({
-      username,
-      passwordHash: await hashPassword(body.password),
-      role: first ? 'admin' : 'user',
-      status: first ? 'active' : 'pending',
-    });
-    console.log(`registered "${user.username}" (${user.status}) from ${ip}`);
-    if (first) return this.startSession(req, res, user, { status: 'active' });
+    if (this.store.userByName(username)) return sendJson(res, 409, { error: 'Tên đăng nhập đã có người dùng.' });
+    const passwordHash = await hashPassword(body.password);
+    if (this.store.userByName(username)) return sendJson(res, 409, { error: 'Tên đăng nhập đã có người dùng.' });
+    // Every web sign-up waits for an admin. Admins are only created from the server shell
+    // (ldplayer-relay-admin), so a fresh server can't be claimed by whoever registers first.
+    const user = this.store.createUser({ username, passwordHash, role: 'user', status: 'pending' });
+    console.log(`registered "${user.username}" (pending) from ${ip}`);
     sendJson(res, 200, { ok: true, status: 'pending' });
   }
 

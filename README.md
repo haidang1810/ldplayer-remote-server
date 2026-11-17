@@ -40,7 +40,7 @@ Xem log: `journalctl -u ldplayer-relay -f`
 
 ## Tài khoản
 
-- Lần cài đầu, script hỏi tên và mật khẩu admin. Người khác tự đăng ký trên trang web, tài khoản ở trạng thái **chờ duyệt** cho tới khi admin bấm *Duyệt* trong trang **Tài khoản** (biểu tượng người ở góc trên).
+- Lần cài đầu, script hỏi tên và mật khẩu admin. Admin **chỉ** tạo được từ shell (`ldplayer-relay-admin admin <tên>`), không ai tự lên admin qua web được. Người khác tự đăng ký trên trang web, tài khoản ở trạng thái **chờ duyệt** cho tới khi admin bấm *Duyệt* trong trang **Tài khoản** (biểu tượng người ở góc trên).
 - Mỗi người tạo **API key** trong trang Tài khoản rồi nhập vào agent trên PC. Một key dùng được cho nhiều PC: mỗi PC gửi kèm mã máy riêng nên hiện thành từng máy. Mỗi người chỉ thấy PC của mình.
 - Xoá key → các PC dùng key đó bị ngắt ngay. Khoá hoặc xoá tài khoản → mọi phiên đăng nhập và PC của người đó bị ngắt.
 - Dữ liệu nằm trong SQLite `/var/lib/ldplayer-relay/relay.db` (ngoài thư mục code, redeploy không đụng tới).
@@ -49,7 +49,7 @@ Xem log: `journalctl -u ldplayer-relay -f`
   - `ldplayer-relay-admin admin <tên>`: tạo admin, hoặc nâng một tài khoản lên admin và đặt lại mật khẩu
   - `ldplayer-relay-admin password <tên>`: đặt lại mật khẩu
 
-**Nâng cấp từ bản một mật khẩu:** lần đầu chạy bản mới, mật khẩu cũ (`PASSWORD_HASH`) thành tài khoản **`admin`**, đăng nhập bằng tên `admin` + mật khẩu cũ. `AGENT_KEY` cũ vẫn dùng được và gắn vào tài khoản admin, nên PC đang chạy không cần sửa gì ngay.
+**Nâng cấp từ bản một mật khẩu:** lần đầu chạy bản mới, mật khẩu cũ (`PASSWORD_HASH`) thành tài khoản **`admin`**, đăng nhập bằng tên `admin` + mật khẩu cũ. `AGENT_KEY` cũ vẫn dùng được và gắn vào tài khoản admin, nên PC đang chạy không cần sửa gì ngay. Key cũ này không thu hồi được trên web: khi PC đã chuyển sang API key mới, xoá dòng `AGENT_KEY=` trong `relay.env` rồi `systemctl restart ldplayer-relay`. Nên đổi luôn mật khẩu `admin` trên web.
 
 ## Cấu hình (`relay.env`)
 
@@ -62,12 +62,13 @@ Xem log: `journalctl -u ldplayer-relay -f`
 | `TURN_SECRET` / `TURN_HOST` / `TURN_PORT` | coturn, script tự đặt |
 | `PASSWORD_HASH` / `AGENT_KEY` | chỉ còn để tương thích bản cũ (xem trên) |
 
-Chạy thử trên máy: `npm install && npm start`, mở http://127.0.0.1:8090 rồi đăng ký: tài khoản đầu tiên của database trống tự thành admin.
+Chạy thử trên máy: `npm install`, `npm run admin -- admin <tên>` để tạo admin, rồi `npm start` và mở http://127.0.0.1:8090.
 
 ## Bảo mật
 
 - Phiên đăng nhập lưu trong database (cookie ngẫu nhiên `HttpOnly`, `Secure`, `SameSite=Strict`, 30 ngày); đổi mật khẩu thì các trình duyệt khác bị đăng xuất.
 - Mật khẩu băm bằng scrypt; API key chỉ lưu SHA-256.
-- Sai mật khẩu 8 lần trên một IP trong 15 phút (hoặc 60 lần tổng trong 1 giờ) thì tạm khoá đăng nhập; mỗi IP đăng ký tối đa 5 lần/giờ.
+- Mỗi IP đăng nhập sai tối đa 8 lần trong 15 phút (đếm trước khi băm mật khẩu, nên gửi song song cũng không vượt được); mỗi IP đăng ký tối đa 5 lần/giờ. Không có giới hạn chung toàn server, để người lạ không khoá được mọi người.
+- TURN: mỗi người dùng có tên đăng nhập TURN riêng (`<hạn>:u<id>`), hạn mức coturn tính theo từng người.
 - WebSocket kiểm tra Origin. Trang không cho nhúng vào iframe.
 - Băng thông: toàn bộ video đi qua VPS (8 Mbps ≈ 3.6 GB/giờ).
