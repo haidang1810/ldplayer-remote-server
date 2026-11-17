@@ -638,7 +638,7 @@ async function rtcStatsLine() {
     backlog,
   };
   // The agent sends at full rate and only backs off on loss the browser sees.
-  wsJson({ type: 'rtc-net', lost: Math.max(0, lost), lossPct: net.lossPct });
+  wsJson({ type: 'rtc-net', lost: Math.max(0, lost), lossPct: net.lossPct, rtt: net.rtt });
   if (!renderTracking && decoded === 0 && bytes > 0 && rtcStalledSeconds >= 2) requestKeyframe();
   if (bytes === 0 && rtcStalledSeconds >= 5) stopRtc('Mất tín hiệu WebRTC', true);
 
